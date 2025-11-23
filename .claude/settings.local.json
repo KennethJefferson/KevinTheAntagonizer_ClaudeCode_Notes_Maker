@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git rev-parse:*)",
+      "Bash(python:*)",
+      "Bash(move \"E:\\WORKSPACE.DEV.PYTHON\\AIML.Agents\\KevinTheAntagonizerClaudeCodeNotesMaker\\cli_args.py\" \"E:\\WORKSPACE.DEV.PYTHON\\AIML.Agents\\KevinTheAntagonizerClaudeCodeNotesMaker\\__deprecated\\cli_args.py\")",
+      "Bash(..venvscriptsactivate.ps1)",
+      "Bash(source .venv/Scripts/activate)",
+      "Bash(sqlite3:*)",
+      "Bash(timeout 60 python:*)",
+      "Bash(pip install:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

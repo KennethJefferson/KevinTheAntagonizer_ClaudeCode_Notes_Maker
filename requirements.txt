@@ -1,0 +1,22 @@
+# Claude Agent SDK - Core dependency for synthesis application
+claude-agent-sdk
+
+# Progress bars for visual feedback
+tqdm
+
+# Note: The following are built-in to Python 3.7+ and don't need to be installed:
+# - asyncio
+# - pathlib
+# - sqlite3
+# - logging
+# - typing
+# - json
+# - datetime
+
+# IMPORTANT: Authentication is handled through Claude Code CLI
+# Claude Code CLI must be installed and you must be logged in:
+#   1. Install: npm install -g @anthropic-ai/claude-code
+#   2. Login: claude-code login
+#   3. Verify: claude-code whoami
+#
+# No API keys are needed - the CLI handles all authentication
