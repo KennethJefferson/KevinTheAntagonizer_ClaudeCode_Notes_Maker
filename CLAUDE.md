@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a **single-file CLI-based Python application** that uses the Claude Agent SDK to synthesize technical course transcripts (SRT files) into comprehensive, expert-level markdown notes. The notes are written in the style of "Kevin Burleigh" - a battle-tested Java/Spring Boot architect with opinionated, practical insights.
 
-**Architecture**: Single-file application with integrated CLI argument parsing, multi-worker support (planned), SQLite-based task management, progress tracking, and automatic retry logic.
+**Architecture**: Single-file application with integrated CLI argument parsing, multi-worker support, SQLite-based task management, progress tracking, graceful shutdown handling, and automatic retry logic.
 
 ## Prerequisites & Environment Setup
 
@@ -49,12 +49,13 @@ python KevinTheAntagonizerClaudeCodeNotesMaker.py -h
 
 The application is now a **single, self-contained file** with all functionality integrated:
 
-**KevinTheAntagonizerClaudeCodeNotesMaker.py** (1031 lines)
+**KevinTheAntagonizerClaudeCodeNotesMaker.py** (~1100 lines)
 - CLI argument parsing and validation
 - Database management (SQLite)
 - File scanning and processing
 - Quality control
 - Synthesis engine using Claude Agent SDK
+- Graceful shutdown handling (Ctrl+C support)
 - Main application entry point
 
 ### Core Components
@@ -570,7 +571,7 @@ Application creates detailed logs with:
 - **Maintenance**: Single point of update
 - **No Import Issues**: No module path problems
 
-### Sequential Processing (Current)
+### Sequential Processing (Single Worker)
 
 Tasks are processed sequentially with:
 - 1 second delay between files (rate limiting)
@@ -578,13 +579,54 @@ Tasks are processed sequentially with:
 - Quality checks after each file
 - Automatic retry on failure (up to 3 attempts)
 
-### Future: Multi-Worker Support
+### Multi-Worker Support
 
-Planned features:
-- Parallel subagent processing
-- Worker pool management
-- Progress bars (1 per worker)
-- Distributed task assignment
+Parallel processing with multiple workers:
+- True parallel asyncio workers with shared task queue
+- Each worker processes `batch_size` files concurrently
+- Total batch: `workers × batch_size` tasks (e.g., 25 workers × 10 = 250 tasks)
+- Individual progress bars per worker plus main progress bar
+- 0.5 second delay between files per worker
+
+### Graceful Shutdown
+
+The application supports graceful shutdown via Ctrl+C:
+
+**First Ctrl+C**: Complete current batch
+- Shows: `[SHUTDOWN] Ctrl+C detected - completing current batch...`
+- All tasks currently loaded (up to `workers × batch_size`) will complete
+- Workers finish their current files before exiting
+- Database remains consistent (tasks either completed or pending)
+
+**Second Ctrl+C**: Force immediate exit
+- Shows: `[SHUTDOWN] Force exit requested - terminating immediately`
+- Raises KeyboardInterrupt for immediate termination
+- atexit handler cleans up progress bars
+
+**Implementation Details**:
+- Uses `asyncio.Event` for cross-coroutine signaling
+- Signal handlers for SIGINT (Ctrl+C) and SIGBREAK (Windows Ctrl+Break)
+- Progress bars tracked for cleanup via atexit handler
+- Works on both Windows and Unix platforms
+
+**Example Output**:
+```
+Processing batch 1...
+[████████████████████] 100/250
+
+<Ctrl+C pressed>
+
+======================================================================
+[SHUTDOWN] Ctrl+C detected - completing current batch...
+[SHUTDOWN] Press Ctrl+C again to force immediate exit
+======================================================================
+
+Worker01: Shutting down...
+Worker02: Shutting down...
+[████████████████████] 250/250
+
+[SHUTDOWN] Batch processing complete, exiting gracefully
+```
 
 ## Advanced Features
 
@@ -693,6 +735,21 @@ For issues with:
 **Note**: This application requires Claude Code CLI authentication. Usage is tracked through your Claude Code account.
 
 ## Changelog
+
+### Version 2.2 (November 2025) - Current
+- **NEW**: Graceful shutdown support (Ctrl+C handling)
+  - First Ctrl+C: Complete current batch before exiting
+  - Second Ctrl+C: Force immediate exit
+  - Progress bar cleanup via atexit handler
+  - Works on Windows (SIGINT, SIGBREAK) and Unix
+- Multi-worker mode now fully functional
+- True parallel asyncio workers with shared task queue
+
+### Version 2.1 (November 2025)
+- **NEW**: Dynamic model discovery from Claude Code CLI
+- **NEW**: `--list-models` command to see available models
+- Automatic model updates (no code changes needed for new releases)
+- Enhanced model validation with helpful error messages
 
 ### Version 2.0 (November 2025)
 - **BREAKING**: Merged `cli_args.py` into main application file

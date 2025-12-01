@@ -4,18 +4,20 @@ A powerful single-file CLI Python application that transforms technical course t
 
 **Notes Style**: Written in the distinctive voice of "Kevin Burleigh" - a battle-tested Java/Spring Boot architect with opinionated, practical insights and real-world gotchas.
 
-**Version**: 2.0 (Single-File Architecture)
+**Version**: 2.2 (Single-File Architecture with Graceful Shutdown)
 
 ---
 
 ## Key Features
 
-- **Single-File Design**: Everything in one self-contained Python file (1031 lines)
+- **Single-File Design**: Everything in one self-contained Python file (~1100 lines)
 - **Integrated CLI**: Full command-line interface with argparse (no separate modules)
 - **Flexible Scanning**: Scan single or multiple folders, with or without recursion
 - **Database Persistence**: SQLite-based task tracking, retry logic, and statistics
 - **Quality Control**: 7-point validation system ensures high-quality synthesis
 - **Model Selection**: Choose from 5 Claude models (haiku, sonnet, opus, sonnet-3.5, sonnet-4.5)
+- **Multi-Worker Support**: True parallel processing with configurable worker count
+- **Graceful Shutdown**: Ctrl+C completes current batch; double Ctrl+C force exits
 - **Custom Personas**: Override default Kevin voice with custom system prompts
 - **Automatic Retry**: Failed files automatically retry up to 3 times
 - **Resume Support**: Continue where you left off if interrupted
@@ -86,8 +88,10 @@ python KevinTheAntagonizerClaudeCodeNotesMaker.py \
 | Argument | Default | Description |
 |----------|---------|-------------|
 | `-recursive` | `false` | Scan subfolders recursively |
-| `-workers <num>` | `1` | Number of parallel workers (future feature) |
-| `-batch-size <num>` | `10` | Files per batch |
+| `-workers <num>` | `1` | Number of parallel workers |
+| `-batch-size <num>` | `10` | Files per batch per worker |
+
+**Note**: With multiple workers, total batch = `workers × batch_size` (e.g., 25 workers × 10 = 250 tasks)
 
 ### Database Management
 
@@ -225,6 +229,67 @@ python KevinTheAntagonizerClaudeCodeNotesMaker.py \
 
 *** DRY RUN MODE - No files will be processed ***
 ```
+
+### Example 7: Multi-Worker Processing
+
+```bash
+# Process with 25 parallel workers, 10 files per batch each
+python KevinTheAntagonizerClaudeCodeNotesMaker.py \
+  -scan /courses \
+  -recursive \
+  -workers 25 \
+  -batch-size 10
+```
+
+**What happens:**
+- Loads up to 250 tasks (25 × 10) per batch
+- Each worker processes files concurrently
+- Individual progress bars for each worker
+- Main progress bar shows overall completion
+
+---
+
+## Graceful Shutdown
+
+The application supports graceful shutdown when you press Ctrl+C:
+
+### First Ctrl+C: Complete Current Batch
+
+```
+Processing batch 1...
+[████████████████████] 100/250
+
+<Ctrl+C pressed>
+
+======================================================================
+[SHUTDOWN] Ctrl+C detected - completing current batch...
+[SHUTDOWN] Press Ctrl+C again to force immediate exit
+======================================================================
+
+Worker01: Shutting down...
+Worker02: Shutting down...
+[████████████████████] 250/250
+
+[SHUTDOWN] Batch processing complete, exiting gracefully
+```
+
+- All tasks currently loaded will complete
+- Workers finish their current files before exiting
+- Database remains consistent
+
+### Second Ctrl+C: Force Exit
+
+```
+<Ctrl+C pressed again>
+
+======================================================================
+[SHUTDOWN] Force exit requested - terminating immediately
+======================================================================
+```
+
+- Immediate termination
+- Progress bars cleaned up via atexit handler
+- In-progress tasks remain "pending" in database for retry
 
 ---
 
@@ -608,7 +673,7 @@ Main dependencies:
 
 ```
 KevinTheAntagonizerClaudeCodeNotesMaker/
-├── KevinTheAntagonizerClaudeCodeNotesMaker.py  # Main application (SINGLE FILE - 1031 lines)
+├── KevinTheAntagonizerClaudeCodeNotesMaker.py  # Main application (SINGLE FILE - ~1100 lines)
 ├── requirements.txt               # Dependencies
 ├── CLAUDE.md                      # Architecture guide
 ├── README.md                      # This file
@@ -617,7 +682,7 @@ KevinTheAntagonizerClaudeCodeNotesMaker/
     └── cli_args.py                # Deprecated (merged into main file)
 ```
 
-**Note**: Version 2.0 merged all CLI functionality into the main file for simplicity and portability.
+**Note**: Version 2.0+ uses single-file architecture for simplicity and portability.
 
 ---
 
@@ -668,7 +733,16 @@ python KevinTheAntagonizerClaudeCodeNotesMaker.py -scan /courses --dry-run
 
 ## Changelog
 
-### Version 2.1 (November 2025) - Current
+### Version 2.2 (November 2025) - Current
+- **NEW**: Graceful shutdown support (Ctrl+C handling)
+  - First Ctrl+C: Complete current batch before exiting
+  - Second Ctrl+C: Force immediate exit
+  - Progress bar cleanup via atexit handler
+  - Works on Windows (SIGINT, SIGBREAK) and Unix
+- Multi-worker mode now fully functional
+- True parallel asyncio workers with shared task queue
+
+### Version 2.1 (November 2025)
 - **NEW**: Dynamic model discovery from Claude Code CLI
 - **NEW**: `--list-models` command to see available models
 - Automatic model updates (no code changes needed for new releases)

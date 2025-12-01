@@ -821,9 +821,14 @@ class FileProcessor:
 
     @staticmethod
     def save_notes(content: str, srt_path: str) -> Optional[str]:
-        """Save synthesized notes to markdown file"""
+        """Save synthesized notes to markdown file (never overwrites existing)"""
         srt_path = Path(srt_path)
         output_path = srt_path.parent / f"{srt_path.stem}_KevinTheAntagonizer_Notes.md"
+
+        # Never overwrite existing notes
+        if output_path.exists():
+            logging.warning(f"Notes already exist, skipping: {output_path.name}")
+            return str(output_path)  # Return path but don't overwrite
 
         try:
             with open(output_path, 'w', encoding='utf-8') as f:
