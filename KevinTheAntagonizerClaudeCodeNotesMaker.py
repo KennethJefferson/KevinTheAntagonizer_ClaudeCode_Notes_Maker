@@ -18,6 +18,8 @@ import asyncio
 import argparse
 import sys
 import os
+import signal
+import atexit
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple
@@ -61,6 +63,209 @@ DEFAULT_WORKERS = 1
 DEFAULT_BATCH_SIZE = 10
 DEFAULT_DB_NAME = "synthesis_tasks.db"
 
+# Global cache for discovered models (populated lazily)
+_DISCOVERED_MODELS = None
+
+# ==============================================================================
+# Graceful Shutdown Support
+# ==============================================================================
+_shutdown_event = None  # asyncio.Event, initialized in main()
+_shutdown_count = 0     # Track Ctrl+C presses
+_active_progress_bars = []  # Track for cleanup
+
+
+def _cleanup_progress_bars():
+    """Emergency cleanup for progress bars on exit"""
+    for pbar in _active_progress_bars:
+        try:
+            pbar.close()
+        except:
+            pass
+    # Clear any leftover ANSI codes
+    print("\033[0m", end="", flush=True)
+
+
+atexit.register(_cleanup_progress_bars)
+
+
+def setup_signal_handlers():
+    """
+    Setup graceful shutdown on Ctrl+C (SIGINT)
+    First Ctrl+C: Complete current batch
+    Second Ctrl+C: Force exit
+    """
+    global _shutdown_count
+
+    def signal_handler(sig, frame):
+        global _shutdown_count
+        _shutdown_count += 1
+
+        if _shutdown_count == 1:
+            print("\n")
+            print("=" * 70)
+            print("[SHUTDOWN] Ctrl+C detected - completing current batch...")
+            print("[SHUTDOWN] Press Ctrl+C again to force immediate exit")
+            print("=" * 70)
+            if _shutdown_event is not None:
+                _shutdown_event.set()
+        else:
+            print("\n")
+            print("=" * 70)
+            print("[SHUTDOWN] Force exit requested - terminating immediately")
+            print("=" * 70)
+            raise KeyboardInterrupt
+
+    signal.signal(signal.SIGINT, signal_handler)
+    # Also handle SIGBREAK on Windows (Ctrl+Break)
+    if hasattr(signal, 'SIGBREAK'):
+        signal.signal(signal.SIGBREAK, signal_handler)
+
+
+# ==============================================================================
+# Model Discovery Functions
+# ==============================================================================
+
+def discover_models_from_cli() -> Dict[str, str]:
+    """
+    Discover available Claude models from Claude Code CLI.
+
+    Returns:
+        Dict mapping model aliases to full model IDs
+        Falls back to AVAILABLE_MODELS if CLI unavailable
+    """
+    import subprocess
+    import shutil
+
+    # Note: logger not available yet at module level, so we'll print warnings
+
+    # Check if claude-code CLI exists
+    cli_path = shutil.which('claude-code')
+    if not cli_path:
+        print("WARNING: Claude Code CLI not found - using static model list", file=sys.stderr)
+        return AVAILABLE_MODELS.copy()
+
+    try:
+        # Attempt to get models from CLI
+        # Try common commands that might work:
+        # 1. claude-code models list
+        # 2. claude-code --list-models
+
+        result = subprocess.run(
+            ['claude-code', 'models', 'list'],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+
+        if result.returncode != 0:
+            # Try alternative command format
+            result = subprocess.run(
+                ['claude-code', '--list-models'],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+
+        if result.returncode == 0:
+            # Parse output (format TBD based on actual CLI)
+            models = parse_cli_models_output(result.stdout)
+            if models:
+                print(f"INFO: Discovered {len(models)} models from Claude Code CLI", file=sys.stderr)
+                return models
+
+        print("WARNING: Could not fetch models from CLI - using static list", file=sys.stderr)
+        return AVAILABLE_MODELS.copy()
+
+    except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as e:
+        print(f"WARNING: Model discovery failed: {e} - using static list", file=sys.stderr)
+        return AVAILABLE_MODELS.copy()
+
+
+def parse_cli_models_output(output: str) -> Optional[Dict[str, str]]:
+    """
+    Parse Claude Code CLI output to extract model mappings.
+
+    Handles multiple potential formats:
+    - JSON: {"models": [{"id": "claude-...", "alias": "..."}]}
+    - Text: lines like "sonnet-4.5    claude-sonnet-4-5-20250929"
+
+    Returns:
+        Dict of alias -> model_id, or None if parsing failed
+    """
+    import re
+
+    models = {}
+
+    # Try JSON parsing first
+    try:
+        data = json.loads(output)
+        # Handle various JSON structures
+        if isinstance(data, dict):
+            if 'models' in data:
+                for model in data['models']:
+                    if 'id' in model and 'alias' in model:
+                        models[model['alias']] = model['id']
+            elif 'data' in data:  # Anthropic API format
+                for model in data['data']:
+                    model_id = model.get('id')
+                    # Generate alias from ID
+                    alias = generate_alias_from_id(model_id)
+                    if alias:
+                        models[alias] = model_id
+        if models:
+            return models
+    except json.JSONDecodeError:
+        pass
+
+    # Try text parsing
+    for line in output.strip().split('\n'):
+        parts = line.split()
+        if len(parts) >= 2:
+            # Format: "alias    model-id"
+            alias, model_id = parts[0], parts[1]
+            if model_id.startswith('claude-'):
+                models[alias] = model_id
+
+    return models if models else None
+
+
+def generate_alias_from_id(model_id: str) -> Optional[str]:
+    """Generate friendly alias from model ID like 'claude-sonnet-4-5-20250929'"""
+    import re
+
+    # Extract family and version from ID
+    match = re.match(r'claude-(\w+)-(\d+)-?(\d+)?-\d{8}', model_id)
+    if match:
+        family = match.group(1)  # sonnet, opus, haiku
+        major = match.group(2)   # 3, 4
+        minor = match.group(3)   # 5, or None
+
+        if minor:
+            return f"{family}-{major}.{minor}"
+        else:
+            return f"{family}-{major}"
+
+    return None
+
+
+def get_available_models(force_refresh: bool = False) -> Dict[str, str]:
+    """
+    Get available models with lazy discovery.
+
+    Args:
+        force_refresh: Force re-discovery even if cached
+
+    Returns:
+        Dictionary of model alias -> model ID mappings
+    """
+    global _DISCOVERED_MODELS
+
+    if _DISCOVERED_MODELS is None or force_refresh:
+        _DISCOVERED_MODELS = discover_models_from_cli()
+
+    return _DISCOVERED_MODELS
+
+
 # ==============================================================================
 # CLI Argument Container
 # ==============================================================================
@@ -78,6 +283,7 @@ class CLIArgs:
         self.list_failed: bool = False
         self.retry_failed: bool = False
         self.stats: bool = False
+        self.list_models: bool = False
         self.system_prompt_file: Optional[Path] = None
         self.model: str = AVAILABLE_MODELS[DEFAULT_MODEL]
         self.model_name: str = DEFAULT_MODEL
@@ -151,12 +357,17 @@ Examples:
   # Dry run to validate
   %(prog)s -scan /courses -recursive --dry-run
 
-Available Models:
-  opus        - Claude 3 Opus (most capable, expensive)
-  sonnet      - Claude 3 Sonnet (balanced)
-  haiku       - Claude 3 Haiku (fast, cheap)
-  sonnet-3.5  - Claude 3.5 Sonnet (better than opus)
-  sonnet-4.5  - Claude 4.5 Sonnet (latest, default)
+  # List available models
+  %(prog)s --list-models
+
+Available Models (use --list-models for current list):
+  Default: sonnet-4.5
+
+  Common aliases:
+    opus, sonnet, haiku          - Latest stable versions
+    sonnet-4.5, sonnet-3.5       - Specific versions
+
+  Run --list-models for complete up-to-date list from Claude Code CLI
         """
     )
 
@@ -233,10 +444,15 @@ Available Models:
     advanced.add_argument(
         '-model',
         type=str,
-        choices=list(AVAILABLE_MODELS.keys()),
+        # Remove choices to allow dynamic validation
         default=DEFAULT_MODEL,
         metavar='<name>',
-        help=f'Claude model selection (default: {DEFAULT_MODEL})'
+        help=f'Claude model selection (default: {DEFAULT_MODEL}, use --list-models to see all)'
+    )
+    advanced.add_argument(
+        '--list-models',
+        action='store_true',
+        help='Show available Claude models and exit'
     )
     advanced.add_argument(
         '--dry-run',
@@ -271,9 +487,9 @@ def validate_args(args: argparse.Namespace) -> CLIArgs:
                 print(f"[ERROR] Scan path is not a directory: {folder}")
                 sys.exit(1)
             cli_args.scan_folders.append(folder)
-    elif not any([args.stats, args.list_failed, args.retry_failed]):
-        # Scan folders are required unless doing database management operations
-        print("[ERROR] -scan argument is required (unless using -stats, -list-failed, or -retry-failed)")
+    elif not any([args.stats, args.list_failed, args.retry_failed, args.list_models]):
+        # Scan folders are required unless doing database management operations or listing models
+        print("[ERROR] -scan argument is required (unless using -stats, -list-failed, -retry-failed, or --list-models)")
         sys.exit(1)
 
     # Validate workers
@@ -299,9 +515,24 @@ def validate_args(args: argparse.Namespace) -> CLIArgs:
             sys.exit(1)
         cli_args.system_prompt_file = prompt_file
 
-    # Set model
+    # Set model with dynamic discovery
+    available_models = get_available_models()
+
+    # Validate selected model
+    if args.model not in available_models:
+        print(f"[ERROR] Model '{args.model}' not available", file=sys.stderr)
+        print(f"[INFO] Available models: {', '.join(available_models.keys())}", file=sys.stderr)
+        print(f"[INFO] Run with --list-models for details", file=sys.stderr)
+
+        # Try re-discovery in case model list changed
+        available_models = get_available_models(force_refresh=True)
+
+        if args.model not in available_models:
+            print(f"[ERROR] Invalid model: {args.model}", file=sys.stderr)
+            sys.exit(1)
+
     cli_args.model_name = args.model
-    cli_args.model = AVAILABLE_MODELS[args.model]
+    cli_args.model = available_models[args.model]
 
     # Set database path
     cli_args.db_path = Path(args.db).resolve()
@@ -312,6 +543,7 @@ def validate_args(args: argparse.Namespace) -> CLIArgs:
     cli_args.list_failed = args.list_failed
     cli_args.retry_failed = args.retry_failed
     cli_args.stats = args.stats
+    cli_args.list_models = args.list_models
     cli_args.dry_run = args.dry_run
 
     return cli_args
@@ -349,7 +581,8 @@ def print_configuration(cli_args: CLIArgs):
     print(f"   - Recursive:   {cli_args.recursive}")
     print(f"   - Workers:     {cli_args.workers}")
     print(f"   - Batch Size:  {cli_args.batch_size}")
-    print(f"   - Model:       {cli_args.model_name} ({cli_args.model})")
+    model_source = "CLI-discovered" if _DISCOVERED_MODELS else "static"
+    print(f"   - Model:       {cli_args.model_name} ({cli_args.model}) [{model_source}]")
 
     print(f"\n[DATABASE]")
     print(f"   - Path:        {cli_args.db_path}")
@@ -875,6 +1108,12 @@ OUTPUT: Provide ONLY the markdown content. No preambles, no confirmations, just 
         tasks_processed = 0
 
         while True:
+            # Check for graceful shutdown
+            if _shutdown_event is not None and _shutdown_event.is_set():
+                worker_pbar.set_description(f"Worker{worker_id:02d}: Shutting down...")
+                self.logger.info(f"Worker{worker_id:02d} received shutdown signal")
+                break
+
             try:
                 # Get task from queue (with timeout to check for completion)
                 task = await asyncio.wait_for(task_queue.get(), timeout=1.0)
@@ -945,6 +1184,7 @@ OUTPUT: Provide ONLY the markdown content. No preambles, no confirmations, just 
                         position=0, leave=True,
                         bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]',
                         ncols=100)
+        _active_progress_bars.append(main_pbar)
 
         # Create worker progress bars
         for i in range(self.cli_args.workers):
@@ -954,6 +1194,7 @@ OUTPUT: Provide ONLY the markdown content. No preambles, no confirmations, just 
                              bar_format='{desc: <30} {bar}| {n_fmt}/{total_fmt}',
                              ncols=100)
             worker_pbars.append(worker_pbar)
+            _active_progress_bars.append(worker_pbar)
 
         # Create worker tasks
         worker_tasks = []
@@ -966,10 +1207,14 @@ OUTPUT: Provide ONLY the markdown content. No preambles, no confirmations, just 
         # Wait for all workers to complete
         results = await asyncio.gather(*worker_tasks)
 
-        # Close all progress bars properly
+        # Close all progress bars properly and remove from tracking
         for pbar in worker_pbars:
             pbar.close()
+            if pbar in _active_progress_bars:
+                _active_progress_bars.remove(pbar)
         main_pbar.close()
+        if main_pbar in _active_progress_bars:
+            _active_progress_bars.remove(main_pbar)
 
         # Clear the progress bar area
         print("\n" * (self.cli_args.workers + 2))
@@ -1005,6 +1250,11 @@ OUTPUT: Provide ONLY the markdown content. No preambles, no confirmations, just 
         with tqdm(total=len(tasks), desc="Processing", leave=True,
                   bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt}') as pbar:
             for task in tasks:
+                # Check for graceful shutdown
+                if _shutdown_event is not None and _shutdown_event.is_set():
+                    self.logger.info("Received shutdown signal, stopping after current file")
+                    break
+
                 if await self.process_single_task(task, worker_id=1):
                     success_count += 1
                 pbar.update(1)
@@ -1067,9 +1317,42 @@ def inventory_files(cli_args: CLIArgs, db: DatabaseManager) -> int:
 
 async def main():
     """Main application entry point"""
+    global _shutdown_event
 
     # Parse command-line arguments
     cli_args = parse_arguments()
+
+    # Initialize graceful shutdown support
+    _shutdown_event = asyncio.Event()
+    setup_signal_handlers()
+
+    # Handle --list-models command (early exit)
+    if cli_args.list_models:
+        print("\n" + "="*80)
+        print("AVAILABLE CLAUDE MODELS")
+        print("="*80 + "\n")
+
+        models = get_available_models(force_refresh=True)
+
+        # Group by family
+        families = {}
+        for alias, model_id in sorted(models.items()):
+            family = alias.split('-')[0]
+            if family not in families:
+                families[family] = []
+            families[family].append((alias, model_id))
+
+        for family, items in sorted(families.items()):
+            print(f"{family.upper()} Family:")
+            for alias, model_id in items:
+                default_marker = " (DEFAULT)" if alias == DEFAULT_MODEL else ""
+                print(f"  {alias:15} -> {model_id}{default_marker}")
+            print()
+
+        print(f"Default: {DEFAULT_MODEL}")
+        print("\nUsage: -model <alias>")
+        print("="*80)
+        return
 
     print("""
     +==============================================================+
@@ -1165,6 +1448,12 @@ async def main():
     total_processed = 0
 
     while True:
+        # Check for graceful shutdown between batches
+        if _shutdown_event is not None and _shutdown_event.is_set():
+            logger.info("Graceful shutdown complete")
+            print("\n[SHUTDOWN] Batch processing complete, exiting gracefully")
+            break
+
         batch_num += 1
 
         # Process batch (this now handles its own progress bars)

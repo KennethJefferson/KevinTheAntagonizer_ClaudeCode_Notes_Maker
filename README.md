@@ -109,6 +109,14 @@ python KevinTheAntagonizerClaudeCodeNotesMaker.py \
 
 ### Available Models
 
+Use `--list-models` to see current options:
+
+```bash
+python KevinTheAntagonizerClaudeCodeNotesMaker.py --list-models
+```
+
+Models are discovered from Claude Code CLI if available, otherwise uses built-in list.
+
 | Model | Description | Use Case |
 |-------|-------------|----------|
 | `sonnet-4.5` | **DEFAULT** - Latest Claude 4.5 | Recommended |
@@ -116,6 +124,8 @@ python KevinTheAntagonizerClaudeCodeNotesMaker.py \
 | `opus` | Claude 3 Opus (premium) | Highest quality |
 | `sonnet` | Claude 3 Sonnet | Balanced |
 | `haiku` | Claude 3 Haiku | Budget option |
+
+**Dynamic Discovery**: The application automatically discovers new models from Claude Code CLI. No code updates needed when new models are released!
 
 ---
 
@@ -632,6 +642,9 @@ This project uses the Claude Agent SDK which is subject to Anthropic's terms of 
 # Help
 python KevinTheAntagonizerClaudeCodeNotesMaker.py -h
 
+# List available models
+python KevinTheAntagonizerClaudeCodeNotesMaker.py --list-models
+
 # Basic usage
 python KevinTheAntagonizerClaudeCodeNotesMaker.py -scan /courses
 
@@ -655,7 +668,14 @@ python KevinTheAntagonizerClaudeCodeNotesMaker.py -scan /courses --dry-run
 
 ## Changelog
 
-### Version 2.0 (November 2025) - Current
+### Version 2.1 (November 2025) - Current
+- **NEW**: Dynamic model discovery from Claude Code CLI
+- **NEW**: `--list-models` command to see available models
+- Automatic model updates (no code changes needed for new releases)
+- Enhanced model validation with helpful error messages
+- Model source indication in configuration display
+
+### Version 2.0 (November 2025)
 - **BREAKING**: Single-file architecture
 - Merged `cli_args.py` into main application
 - Improved CLI argument parsing

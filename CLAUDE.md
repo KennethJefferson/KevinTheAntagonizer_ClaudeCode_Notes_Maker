@@ -187,6 +187,94 @@ AVAILABLE_MODELS = {
 }
 ```
 
+### Dynamic Model Discovery
+
+The application can discover available Claude models from the Claude Code CLI, eliminating the need to update code when new models are released.
+
+#### How It Works
+
+1. **Lazy Loading**: Models are discovered only when needed:
+   - When `--list-models` flag is used
+   - When validating model selection during startup
+   - When selected model not found in static list
+
+2. **CLI Integration**: Uses `claude-code` CLI if available:
+   ```bash
+   claude-code models list
+   ```
+   The application tries multiple command formats to maximize compatibility.
+
+3. **Graceful Fallback**: If CLI unavailable, uses hardcoded AVAILABLE_MODELS
+   - No API key needed
+   - Works offline with static fallback
+   - Displays warning when falling back to static list
+
+4. **Session Cache**: Discovery result cached in memory for the entire session
+   - Single discovery per run
+   - Force refresh with `--list-models` (always refreshes)
+
+#### Commands
+
+```bash
+# List all available models
+python KevinTheAntagonizerClaudeCodeNotesMaker.py --list-models
+
+# Output shows:
+# - Model aliases grouped by family
+# - Full model IDs
+# - Default model marker
+# - Source indication (CLI-discovered or static)
+```
+
+**Example Output:**
+```
+================================================================================
+AVAILABLE CLAUDE MODELS
+================================================================================
+
+HAIKU Family:
+  haiku           -> claude-3-haiku-20240307
+
+OPUS Family:
+  opus            -> claude-3-opus-20240229
+
+SONNET Family:
+  sonnet          -> claude-3-sonnet-20240229
+  sonnet-3.5      -> claude-3-5-sonnet-20241022
+  sonnet-4.5      -> claude-sonnet-4-5-20250929 (DEFAULT)
+
+Default: sonnet-4.5
+
+Usage: -model <alias>
+================================================================================
+```
+
+#### Requirements
+
+- **Claude Code CLI**: Optional but recommended for automatic updates
+  - Install: `npm install -g @anthropic-ai/claude-code`
+  - Login: `claude-code login`
+- **No API Key Needed**: Uses existing CLI authentication
+- **Offline Support**: Falls back to built-in model list
+
+#### Model Validation
+
+When you select a model with `-model <alias>`, the application:
+
+1. Attempts to discover models from CLI
+2. Validates your selection against discovered models
+3. If model not found, tries to refresh discovery
+4. Provides helpful error messages with suggestions
+
+**Error Example:**
+```bash
+$ python KevinTheAntagonizerClaudeCodeNotesMaker.py -scan /courses -model invalid
+
+[ERROR] Model 'invalid' not available
+[INFO] Available models: opus, sonnet, haiku, sonnet-3.5, sonnet-4.5
+[INFO] Run with --list-models for details
+```
+
 ## Running the Application
 
 ### Basic Examples
@@ -212,6 +300,9 @@ python KevinTheAntagonizerClaudeCodeNotesMaker.py \
   -scan /courses \
   -recursive \
   --dry-run
+
+# List available models
+python KevinTheAntagonizerClaudeCodeNotesMaker.py --list-models
 
 # Check statistics
 python KevinTheAntagonizerClaudeCodeNotesMaker.py -stats

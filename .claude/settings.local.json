@@ -8,7 +8,10 @@
       "Bash(source .venv/Scripts/activate)",
       "Bash(sqlite3:*)",
       "Bash(timeout 60 python:*)",
-      "Bash(pip install:*)"
+      "Bash(pip install:*)",
+      "Bash(claude-code:*)",
+      "WebSearch",
+      "WebFetch(domain:platform.claude.com)"
     ],
     "deny": [],
     "ask": []

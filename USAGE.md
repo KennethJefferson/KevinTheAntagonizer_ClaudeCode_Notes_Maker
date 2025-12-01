@@ -1,6 +1,6 @@
 # KevinTheAntagonizerClaudeCodeNotesMaker - Comprehensive Usage Guide
 
-**Version**: 2.0 (Single-File Architecture)
+**Version**: 2.1 (Dynamic Model Discovery)
 **Last Updated**: November 2025
 
 ## Table of Contents
@@ -8,15 +8,16 @@
 1. [Overview](#overview)
 2. [Installation](#installation)
 3. [Command-Line Interface](#command-line-interface)
-4. [Basic Usage Examples](#basic-usage-examples)
-5. [Advanced Usage](#advanced-usage)
-6. [Database Management](#database-management)
-7. [Progress Monitoring](#progress-monitoring)
-8. [Understanding Output](#understanding-output)
-9. [Troubleshooting](#troubleshooting)
-10. [Best Practices](#best-practices)
-11. [Performance Tuning](#performance-tuning)
-12. [Changelog](#changelog)
+4. [Complete Argument Reference](#complete-argument-reference)
+5. [Basic Usage Examples](#basic-usage-examples)
+6. [Advanced Usage](#advanced-usage)
+7. [Database Management](#database-management)
+8. [Progress Monitoring](#progress-monitoring)
+9. [Understanding Output](#understanding-output)
+10. [Troubleshooting](#troubleshooting)
+11. [Best Practices](#best-practices)
+12. [Performance Tuning](#performance-tuning)
+13. [Changelog](#changelog)
 
 ---
 
@@ -120,6 +121,7 @@ python KevinTheAntagonizerClaudeCodeNotesMaker.py \
 |----------|-------------|
 | `-system-prompt <file>` | Use custom system prompt from file |
 | `-model <name>` | Claude model selection (see [Models](#available-models)) |
+| `--list-models` | Show available Claude models and exit |
 | `--dry-run` | Validate configuration without processing files |
 
 ### Available Models
@@ -131,6 +133,188 @@ python KevinTheAntagonizerClaudeCodeNotesMaker.py \
 | `opus` | `claude-3-opus-20240229` | Most capable (expensive) | Premium quality |
 | `sonnet` | `claude-3-sonnet-20240229` | Balanced performance | Cost-effective |
 | `haiku` | `claude-3-haiku-20240307` | Fast and cheap | Budget option |
+
+### Discovering Available Models
+
+**NEW in Version 2.1**: Dynamic model discovery from Claude Code CLI
+
+List all available models:
+
+```bash
+python KevinTheAntagonizerClaudeCodeNotesMaker.py --list-models
+```
+
+**Example Output:**
+```
+================================================================================
+AVAILABLE CLAUDE MODELS
+================================================================================
+
+HAIKU Family:
+  haiku           -> claude-3-haiku-20240307
+
+OPUS Family:
+  opus            -> claude-3-opus-20240229
+
+SONNET Family:
+  sonnet          -> claude-3-sonnet-20240229
+  sonnet-3.5      -> claude-3-5-sonnet-20241022
+  sonnet-4.5      -> claude-sonnet-4-5-20250929 (DEFAULT)
+
+Default: sonnet-4.5
+
+Usage: -model <alias>
+================================================================================
+```
+
+**How It Works:**
+
+Models are automatically discovered from Claude Code CLI when:
+- You run `--list-models`
+- Selected model is not in the current list
+- First validation during startup
+
+If Claude Code CLI is unavailable, falls back to built-in model list.
+
+**Benefits:**
+- **No Code Updates Needed**: New models appear automatically
+- **Always Current**: See latest releases as soon as they're available
+- **Offline Support**: Works with static fallback if CLI unavailable
+
+---
+
+## Complete Argument Reference
+
+### All Arguments and Switches (Alphabetical)
+
+| Argument | Type | Default | Required | Description |
+|----------|------|---------|----------|-------------|
+| `-batch-size <num>` | Integer | `10` | No | Number of files to process per batch |
+| `-db <path>` | String | `synthesis_tasks.db` | No | Path to SQLite database file |
+| `--dry-run` | Flag | `false` | No | Validate configuration without processing any files |
+| `--list-models` | Flag | `false` | No | Show all available Claude models and exit |
+| `-list-failed` | Flag | `false` | No | Display all failed tasks from database and exit |
+| `-model <name>` | String | `sonnet-4.5` | No | Claude model to use (opus, sonnet, haiku, sonnet-3.5, sonnet-4.5) |
+| `-recursive` | Flag | `false` | No | Scan subdirectories recursively |
+| `-reset-db` | Flag | `false` | No | Clear all data from database and start fresh |
+| `-retry-failed` | Flag | `false` | No | Retry all previously failed tasks from database |
+| `-scan <folder>` | String | None | Yes* | Folder to scan for .srt files (can be repeated multiple times) |
+| `-stats` | Flag | `false` | No | Show database statistics and exit |
+| `-system-prompt <file>` | String | None | No | Path to custom system prompt file (overrides Kevin persona) |
+| `-workers <num>` | Integer | `1` | No | Number of parallel workers/subagents (future feature) |
+
+\* **Note**: `-scan` is required unless using `-stats`, `-list-failed`, `-retry-failed`, or `--list-models`
+
+### Argument Categories
+
+#### Information & Help
+```bash
+-h, --help              # Show help message and exit
+--list-models           # Show available Claude models and exit
+-stats                  # Show database statistics and exit
+-list-failed            # Show failed tasks and exit
+```
+
+#### Required Processing Arguments
+```bash
+-scan <folder>          # Folder(s) to scan for .srt files (repeatable)
+```
+
+#### Processing Control
+```bash
+-recursive              # Scan subdirectories recursively
+-workers <num>          # Parallel workers (default: 1)
+-batch-size <num>       # Files per batch (default: 10)
+-model <name>           # Claude model selection (default: sonnet-4.5)
+```
+
+#### Database Management
+```bash
+-db <path>              # Custom database path (default: synthesis_tasks.db)
+-reset-db               # Clear database and start fresh
+-retry-failed           # Retry all failed tasks
+```
+
+#### Advanced Options
+```bash
+-system-prompt <file>   # Custom system prompt file
+--dry-run               # Validate configuration only (no processing)
+```
+
+### Usage Patterns
+
+**Information Only (No Processing):**
+```bash
+python KevinTheAntagonizerClaudeCodeNotesMaker.py -h
+python KevinTheAntagonizerClaudeCodeNotesMaker.py --list-models
+python KevinTheAntagonizerClaudeCodeNotesMaker.py -stats
+python KevinTheAntagonizerClaudeCodeNotesMaker.py -list-failed
+```
+
+**Basic Processing:**
+```bash
+python KevinTheAntagonizerClaudeCodeNotesMaker.py -scan <folder>
+```
+
+**Processing with Options:**
+```bash
+python KevinTheAntagonizerClaudeCodeNotesMaker.py \
+  -scan <folder> \
+  [-scan <folder> ...] \
+  [-recursive] \
+  [-workers <num>] \
+  [-batch-size <num>] \
+  [-model <name>] \
+  [-db <path>] \
+  [-system-prompt <file>] \
+  [--dry-run]
+```
+
+**Database Operations:**
+```bash
+# Reset and process
+python KevinTheAntagonizerClaudeCodeNotesMaker.py -reset-db -scan <folder>
+
+# Retry failed tasks only (no -scan needed)
+python KevinTheAntagonizerClaudeCodeNotesMaker.py -retry-failed
+```
+
+### Flag Combinations
+
+**Valid Combinations:**
+- `-scan` + `-recursive` + `-workers` + `-batch-size` + `-model` + `-db`
+- `-scan` + `--dry-run` (validation only)
+- `-reset-db` + `-scan` (clear database and process)
+- `-retry-failed` (no other arguments needed)
+- `-stats` (alone)
+- `-list-failed` (alone)
+- `--list-models` (alone)
+
+**Invalid Combinations:**
+- `-scan` without a folder path
+- `-reset-db` without `-scan` (nothing to process)
+- `-workers` with value < 1
+- `-batch-size` with value < 1
+- `--dry-run` + `-retry-failed` (contradictory)
+
+### Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Success - all files processed or info command completed |
+| `1` | Error - invalid arguments, missing files, or processing failure |
+
+### Automatic Outputs
+
+These files are **always created** during processing runs:
+
+| File | Location | Description |
+|------|----------|-------------|
+| `runID.YYYYMMDD.HHMMSS.log` | Script directory | Timestamped log file with detailed progress |
+| `synthesis_tasks.db` | Script directory (or custom `-db` path) | SQLite database tracking all tasks |
+| `*_KevinTheAntagonizer_Notes.md` | Same as .srt file | Generated notes for each transcript |
+
+---
 
 ### Automatic Features
 
