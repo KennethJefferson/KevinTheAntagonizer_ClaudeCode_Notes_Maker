@@ -815,6 +815,11 @@ For issues with:
   - Solution: Semaphore limits concurrent API calls to 3
   - Added jitter (0.1-0.5s) to stagger file access timing
   - Retry logic with exponential backoff for EBUSY errors
+- **FIXED**: Windows "[Errno 22] Invalid argument" in multi-worker mode
+  - tqdm progress bar cursor positioning failed on Windows console
+  - Solution: Safe wrapper functions for all progress bar operations
+  - `safe_pbar_update()`, `safe_pbar_set_description()`, `safe_pbar_close()`
+  - Gracefully handles OSError with errno 22 without crashing
 - **IMPROVED**: Better error logging for SDK exceptions
   - Logs full exception type and message
   - Includes traceback for debugging

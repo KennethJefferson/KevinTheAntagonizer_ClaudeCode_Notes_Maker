@@ -50,6 +50,49 @@ from claude_agent_sdk import (
 )
 
 # ==============================================================================
+# Safe Progress Bar Helpers (Windows Errno 22 workaround)
+# ==============================================================================
+# On Windows, tqdm's ANSI escape sequences for cursor positioning can fail
+# with "[Errno 22] Invalid argument" when multiple workers update simultaneously.
+# These helpers wrap tqdm operations to gracefully handle this error.
+
+def safe_pbar_update(pbar: tqdm, n: int = 1) -> bool:
+    """Safely update progress bar, catching Errno 22 on Windows."""
+    if pbar is None:
+        return False
+    try:
+        pbar.update(n)
+        return True
+    except OSError as e:
+        if e.errno == 22:  # Invalid argument
+            return False
+        raise
+
+def safe_pbar_set_description(pbar: tqdm, desc: str) -> bool:
+    """Safely set progress bar description, catching Errno 22 on Windows."""
+    if pbar is None:
+        return False
+    try:
+        pbar.set_description(desc)
+        return True
+    except OSError as e:
+        if e.errno == 22:  # Invalid argument
+            return False
+        raise
+
+def safe_pbar_close(pbar: tqdm) -> bool:
+    """Safely close progress bar, catching Errno 22 on Windows."""
+    if pbar is None:
+        return False
+    try:
+        pbar.close()
+        return True
+    except OSError as e:
+        if e.errno == 22:  # Invalid argument
+            return False
+        raise
+
+# ==============================================================================
 # CLI Configuration & Constants
 # ==============================================================================
 
@@ -1400,9 +1443,8 @@ OUTPUT: Provide ONLY the markdown content. No preambles, no confirmations, just 
         lecture_name = task['lecture_name']
         course_name = task['course_name']
 
-        # Update worker progress bar description
-        if worker_pbar:
-            worker_pbar.set_description(f"Worker{worker_id:02d}: {lecture_name[:30]}")
+        # Update worker progress bar description (safe for Windows)
+        safe_pbar_set_description(worker_pbar, f"Worker{worker_id:02d}: {lecture_name[:30]}")
 
         self.logger.info(f"Worker{worker_id:02d} processing [{task_id}]: {lecture_name}")
 
@@ -1452,9 +1494,8 @@ OUTPUT: Provide ONLY the markdown content. No preambles, no confirmations, just 
                                   quality_score=quality_score,
                                   tokens_used=len(transcript) // 4)  # Rough estimate
 
-        # Update worker progress bar if provided
-        if worker_pbar:
-            worker_pbar.update(1)
+        # Update worker progress bar if provided (safe for Windows)
+        safe_pbar_update(worker_pbar, 1)
 
         self.logger.info(f"Worker{worker_id:02d} completed: {lecture_name} (quality: {quality_score:.2f})")
         return True
@@ -1470,7 +1511,7 @@ OUTPUT: Provide ONLY the markdown content. No preambles, no confirmations, just 
         while True:
             # Check for graceful shutdown
             if _shutdown_event is not None and _shutdown_event.is_set():
-                worker_pbar.set_description(f"Worker{worker_id:02d}: Shutting down...")
+                safe_pbar_set_description(worker_pbar, f"Worker{worker_id:02d}: Shutting down...")
                 self.logger.info(f"Worker{worker_id:02d} received shutdown signal")
                 break
 
@@ -1479,15 +1520,15 @@ OUTPUT: Provide ONLY the markdown content. No preambles, no confirmations, just 
                 task = await asyncio.wait_for(task_queue.get(), timeout=1.0)
 
                 tasks_processed += 1
-                # Update worker bar to show current task
-                worker_pbar.set_description(f"Worker{worker_id:02d}: Task {tasks_processed}/{self.cli_args.batch_size}")
+                # Update worker bar to show current task (safe for Windows)
+                safe_pbar_set_description(worker_pbar, f"Worker{worker_id:02d}: Task {tasks_processed}/{self.cli_args.batch_size}")
 
                 # Process the task
                 result = await self.process_single_task(task, worker_id, worker_pbar)
 
                 if result:
                     success_count += 1
-                    main_pbar.update(1)  # Update main progress bar
+                    safe_pbar_update(main_pbar, 1)  # Update main progress bar (safe for Windows)
 
                 # Mark task as done
                 task_queue.task_done()
@@ -1502,7 +1543,7 @@ OUTPUT: Provide ONLY the markdown content. No preambles, no confirmations, just 
             except Exception as e:
                 self.logger.error(f"Worker{worker_id:02d} error: {e}")
 
-        worker_pbar.set_description(f"Worker{worker_id:02d}: Complete ({success_count} files)")
+        safe_pbar_set_description(worker_pbar, f"Worker{worker_id:02d}: Complete ({success_count} files)")
         return success_count
 
     async def process_all_tasks(self) -> int:
@@ -1567,12 +1608,12 @@ OUTPUT: Provide ONLY the markdown content. No preambles, no confirmations, just 
         # Wait for all workers to complete
         results = await asyncio.gather(*worker_tasks)
 
-        # Close all progress bars properly and remove from tracking
+        # Close all progress bars properly and remove from tracking (safe for Windows)
         for pbar in worker_pbars:
-            pbar.close()
+            safe_pbar_close(pbar)
             if pbar in _active_progress_bars:
                 _active_progress_bars.remove(pbar)
-        main_pbar.close()
+        safe_pbar_close(main_pbar)
         if main_pbar in _active_progress_bars:
             _active_progress_bars.remove(main_pbar)
 
@@ -1617,7 +1658,7 @@ OUTPUT: Provide ONLY the markdown content. No preambles, no confirmations, just 
 
                 if await self.process_single_task(task, worker_id=1):
                     success_count += 1
-                pbar.update(1)
+                safe_pbar_update(pbar, 1)  # Safe for Windows
 
                 # Brief pause between API calls to avoid rate limiting
                 await asyncio.sleep(1)
