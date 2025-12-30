@@ -31,9 +31,9 @@ import random
 # ==============================================================================
 # Concurrency Control for Claude API Calls
 # ==============================================================================
-# Limits concurrent Claude API calls to prevent EBUSY file locking on ~/.claude.json
-# Multiple claude.exe processes competing for the same config file causes errors
-CLAUDE_CONCURRENCY_LIMIT = 3  # Max concurrent Claude API calls
+# Set high to allow full parallelism - user accepts crash risk for speed
+# If EBUSY errors occur, reduce this value (e.g., 3-10) for stability
+CLAUDE_CONCURRENCY_LIMIT = 100  # Effectively unlimited - all workers can run
 _claude_semaphore: Optional[asyncio.Semaphore] = None
 
 # REAL Claude Agent SDK imports

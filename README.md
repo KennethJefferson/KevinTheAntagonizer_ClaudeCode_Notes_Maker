@@ -4,7 +4,7 @@ A powerful single-file CLI Python application that transforms technical course t
 
 **Notes Style**: Written in the distinctive voice of "Kevin Burleigh" - a battle-tested Java/Spring Boot architect with opinionated, practical insights and real-world gotchas.
 
-**Version**: 2.3 (Hybrid Auth with Model Caching)
+**Version**: 2.5 (Full Parallelism with Tunable Concurrency)
 
 ---
 
@@ -246,9 +246,15 @@ python KevinTheAntagonizerClaudeCodeNotesMaker.py \
 
 **What happens:**
 - Loads up to 250 tasks (25 × 10) per batch
-- Each worker processes files concurrently
+- All workers can hit the API simultaneously
+- Jitter (0.1-0.5s) still provides slight staggering
 - Individual progress bars for each worker
 - Main progress bar shows overall completion
+
+**If EBUSY crashes occur:**
+- Edit line 36 in `KevinTheAntagonizerClaudeCodeNotesMaker.py`
+- Change `CLAUDE_CONCURRENCY_LIMIT = 100` to `10` or `15`
+- Or restart and hope for better timing luck
 
 ---
 
@@ -744,7 +750,18 @@ python KevinTheAntagonizerClaudeCodeNotesMaker.py -scan /courses --dry-run
 
 ## Changelog
 
-### Version 2.3 (December 2025) - Current
+### Version 2.5 (December 2025) - Current
+- **CHANGED**: Concurrency limit raised from 3 to 100 for full parallelism
+  - All workers can hit the API simultaneously
+  - Jitter (0.1-0.5s) still provides slight staggering
+  - **Tunable**: Edit `CLAUDE_CONCURRENCY_LIMIT` (line 36) if EBUSY errors occur
+  - Recommended: 100 (speed), 10-15 (balanced), 3 (stability)
+
+### Version 2.4 (December 2025)
+- **FIXED**: Windows command line limit, EBUSY file locking, Errno 22 crashes
+- **IMPROVED**: Safe progress bar wrappers for Windows compatibility
+
+### Version 2.3 (December 2025)
 - **NEW**: Hybrid authentication approach
   - `--list-models`: Uses Anthropic API for fresh model data
   - All synthesis: Uses Claude Code CLI auth (subscription login)

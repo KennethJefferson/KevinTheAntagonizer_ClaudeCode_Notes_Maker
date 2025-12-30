@@ -1,7 +1,7 @@
 # KevinTheAntagonizerClaudeCodeNotesMaker - Comprehensive Usage Guide
 
-**Version**: 2.1 (Dynamic Model Discovery)
-**Last Updated**: November 2025
+**Version**: 2.5 (Full Parallelism with Tunable Concurrency)
+**Last Updated**: December 2025
 
 ## Table of Contents
 
@@ -1101,31 +1101,43 @@ python KevinTheAntagonizerClaudeCodeNotesMaker.py -scan /courses --dry-run
 
 ## Changelog
 
-### Version 2.0 (November 2025) - Current
+### Version 2.5 (December 2025) - Current
+- **CHANGED**: Concurrency limit raised from 3 to 100 for full parallelism
+  - All workers can hit the API simultaneously
+  - Jitter (0.1-0.5s) still provides slight staggering
+  - **Tunable**: Edit `CLAUDE_CONCURRENCY_LIMIT` (line 36) if EBUSY errors occur
+  - Recommended: 100 (speed), 10-15 (balanced), 3 (stability)
 
-**Major Changes:**
+### Version 2.4 (December 2025)
+- **FIXED**: Windows command line limit for large transcripts
+- **FIXED**: EBUSY file locking for parallel workers
+- **FIXED**: Windows "[Errno 22] Invalid argument" in multi-worker mode
+- **IMPROVED**: Safe progress bar wrappers for Windows compatibility
+
+### Version 2.3 (December 2025)
+- **NEW**: Hybrid authentication (API for model listing, CLI for synthesis)
+- **NEW**: Persistent model caching
+- **NEW**: Organized config/ and __db/ directories
+
+### Version 2.2 (November 2025)
+- **NEW**: Graceful shutdown support (Ctrl+C handling)
+- Multi-worker mode now fully functional
+
+### Version 2.1 (November 2025)
+- **NEW**: Dynamic model discovery from Claude Code CLI
+- **NEW**: `--list-models` command
+
+### Version 2.0 (November 2025)
 - **BREAKING**: Single-file architecture - all functionality merged into one file
 - Integrated CLI argument parsing (no separate cli_args.py module)
 - Improved Windows encoding compatibility (ASCII-safe output)
 - Enhanced error handling and validation
-- Moved deprecated files to `__deprecated/` folder
-
-**Improvements:**
-- Better CLI help messages and argument validation
-- Clearer configuration display on startup
-- Comprehensive logging with timestamps
-- Database schema optimized for better tracking
 
 ### Version 1.0 (Initial Release)
-
-**Features:**
 - Multi-file architecture with separate CLI module
 - Basic CLI support with argparse
 - SQLite database task tracking
 - Quality control system with 7-point validation
-- Support for 5 Claude models
-- Batch processing with configurable workers
-- Progress bars and logging
 
 ---
 

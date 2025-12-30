@@ -804,7 +804,15 @@ For issues with:
 
 ## Changelog
 
-### Version 2.4 (December 2025) - Current
+### Version 2.5 (December 2025) - Current
+- **CHANGED**: Concurrency limit raised from 3 to 100 for full parallelism
+  - All workers can now hit the API simultaneously (was limited to 3)
+  - Jitter (0.1-0.5s) still provides slight staggering between calls
+  - Full speed restored for multi-worker processing
+  - **Tunable**: Edit `CLAUDE_CONCURRENCY_LIMIT` in code (line 36) if EBUSY errors occur
+  - Recommended values: 100 (max speed), 10-15 (balanced), 3 (max stability)
+
+### Version 2.4 (December 2025)
 - **FIXED**: Windows command line limit for large transcripts
   - Windows has 8191 character command line limit
   - Large transcripts (40KB+) exceed limit when passed via CLI
@@ -812,8 +820,7 @@ For issues with:
   - Sends prompt via stdin instead of command line
 - **FIXED**: EBUSY file locking for parallel workers
   - Multiple workers competing for `~/.claude.json` caused errors
-  - Solution: Semaphore limits concurrent API calls to 3
-  - Added jitter (0.1-0.5s) to stagger file access timing
+  - Solution: Semaphore with jitter to stagger file access timing
   - Retry logic with exponential backoff for EBUSY errors
 - **FIXED**: Windows "[Errno 22] Invalid argument" in multi-worker mode
   - tqdm progress bar cursor positioning failed on Windows console
