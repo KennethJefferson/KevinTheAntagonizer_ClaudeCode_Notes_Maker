@@ -26,6 +26,7 @@ from typing import List, Dict, Optional, Tuple
 import logging
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import random
 
 # REAL Claude Agent SDK imports
 from claude_agent_sdk import (
@@ -71,6 +72,14 @@ API_KEY_FILE = ".anthropic_api_key"  # For model listing only
 
 # Global cache for discovered models (populated lazily)
 _DISCOVERED_MODELS = None
+
+# ==============================================================================
+# Concurrency Control for Claude API Calls
+# ==============================================================================
+# Limits concurrent Claude API calls to prevent EBUSY file locking on ~/.claude.json
+# Multiple claude.exe processes competing for the same config file causes errors
+CLAUDE_CONCURRENCY_LIMIT = 3  # Max concurrent Claude API calls
+_claude_semaphore: Optional[asyncio.Semaphore] = None
 
 # ==============================================================================
 # Graceful Shutdown Support
@@ -1301,18 +1310,43 @@ OUTPUT: Provide ONLY the markdown content. No preambles, no confirmations, just 
                 disallowed_tools=Config.DISALLOWED_TOOLS,
                 permission_mode='default',  # Use default permission handling with allowed/disallowed tools
                 max_turns=1,  # Single turn for synthesis
-                cwd=Path.cwd()  # Use current directory
+                cwd=Path.cwd(),  # Use current directory
+                setting_sources=None  # Explicit isolation for parallel workers
             )
 
-            # Use the SDK to query Claude
-            full_response = ""
-            async for message in query(prompt=prompt, options=options):
-                if isinstance(message, AssistantMessage):
-                    for block in message.content:
-                        if isinstance(block, TextBlock):
-                            full_response += block.text
+            # Use semaphore to limit concurrent Claude API calls (prevents EBUSY on ~/.claude.json)
+            global _claude_semaphore
+            if _claude_semaphore is None:
+                _claude_semaphore = asyncio.Semaphore(CLAUDE_CONCURRENCY_LIMIT)
 
-            return full_response if full_response else None
+            max_retries = 3
+            for attempt in range(max_retries):
+                async with _claude_semaphore:
+                    # Add jitter to stagger file access timing
+                    await asyncio.sleep(random.uniform(0.1, 0.5))
+
+                    try:
+                        full_response = ""
+                        async for message in query(prompt=prompt, options=options):
+                            if isinstance(message, AssistantMessage):
+                                for block in message.content:
+                                    if isinstance(block, TextBlock):
+                                        full_response += block.text
+
+                        return full_response if full_response else None
+
+                    except ProcessError as e:
+                        # Check for EBUSY error and retry with backoff
+                        if "EBUSY" in str(e) and attempt < max_retries - 1:
+                            wait_time = 0.5 * (2 ** attempt)  # Exponential backoff
+                            self.logger.warning(f"EBUSY error on attempt {attempt + 1}, retrying in {wait_time:.1f}s...")
+                            await asyncio.sleep(wait_time)
+                            continue
+                        raise  # Re-raise if not EBUSY or max retries reached
+
+            # Should not reach here, but just in case
+            self.logger.error("Max retries exceeded for Claude API call")
+            return None
 
         except CLINotFoundError:
             self.logger.error("Claude Code CLI not found or not logged in.")
