@@ -804,7 +804,22 @@ For issues with:
 
 ## Changelog
 
-### Version 2.3 (December 2025) - Current
+### Version 2.4 (December 2025) - Current
+- **FIXED**: Windows command line limit for large transcripts
+  - Windows has 8191 character command line limit
+  - Large transcripts (40KB+) exceed limit when passed via CLI
+  - Solution: Use streaming mode for prompts > 7500 chars
+  - Sends prompt via stdin instead of command line
+- **FIXED**: EBUSY file locking for parallel workers
+  - Multiple workers competing for `~/.claude.json` caused errors
+  - Solution: Semaphore limits concurrent API calls to 3
+  - Added jitter (0.1-0.5s) to stagger file access timing
+  - Retry logic with exponential backoff for EBUSY errors
+- **IMPROVED**: Better error logging for SDK exceptions
+  - Logs full exception type and message
+  - Includes traceback for debugging
+
+### Version 2.3 (December 2025)
 - **NEW**: Hybrid authentication approach
   - `--list-models`: Uses Anthropic API for fresh model data
   - All other operations: Uses Claude Code CLI auth (subscription login)
