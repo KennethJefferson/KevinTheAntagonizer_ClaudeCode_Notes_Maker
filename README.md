@@ -4,13 +4,13 @@ A powerful single-file CLI Python application that transforms technical course t
 
 **Notes Style**: Written in the distinctive voice of "Kevin Burleigh" - a battle-tested Java/Spring Boot architect with opinionated, practical insights and real-world gotchas.
 
-**Version**: 2.2 (Single-File Architecture with Graceful Shutdown)
+**Version**: 2.3 (Hybrid Auth with Model Caching)
 
 ---
 
 ## Key Features
 
-- **Single-File Design**: Everything in one self-contained Python file (~1100 lines)
+- **Single-File Design**: Everything in one self-contained Python file (~1200 lines)
 - **Integrated CLI**: Full command-line interface with argparse (no separate modules)
 - **Flexible Scanning**: Scan single or multiple folders, with or without recursion
 - **Database Persistence**: SQLite-based task tracking, retry logic, and statistics
@@ -63,7 +63,8 @@ python KevinTheAntagonizerClaudeCodeNotesMaker.py \
 The application provides:
 - Real-time console output with progress
 - Automatic log file: `runID.YYYYMMDD.HHMMSS.log`
-- Database tracking: `synthesis_tasks.db`
+- Database tracking: `__db/synthesis_tasks.db`
+- Configuration storage: `config/`
 
 ---
 
@@ -97,7 +98,7 @@ python KevinTheAntagonizerClaudeCodeNotesMaker.py \
 
 | Argument | Description |
 |----------|-------------|
-| `-db <path>` | Custom database path (default: `synthesis_tasks.db`) |
+| `-db <path>` | Custom database path (default: `__db/synthesis_tasks.db`) |
 | `-reset-db` | Clear database and start fresh |
 | `-list-failed` | Show failed tasks and exit |
 | `-retry-failed` | Retry all failed tasks |
@@ -119,7 +120,7 @@ Use `--list-models` to see current options:
 python KevinTheAntagonizerClaudeCodeNotesMaker.py --list-models
 ```
 
-Models are discovered from Claude Code CLI if available, otherwise uses built-in list.
+Models are fetched from Anthropic API (requires API key for `--list-models`) and cached locally in `config/claude_models_cache.json`.
 
 | Model | Description | Use Case |
 |-------|-------------|----------|
@@ -129,7 +130,9 @@ Models are discovered from Claude Code CLI if available, otherwise uses built-in
 | `sonnet` | Claude 3 Sonnet | Balanced |
 | `haiku` | Claude 3 Haiku | Budget option |
 
-**Dynamic Discovery**: The application automatically discovers new models from Claude Code CLI. No code updates needed when new models are released!
+**Hybrid Auth**:
+- `--list-models` uses Anthropic API (requires API key, prompted on first use)
+- All synthesis uses Claude Code CLI auth (subscription login, no API key needed)
 
 ---
 
@@ -443,21 +446,23 @@ CREATE TABLE tasks (
 
 ### Manual Database Queries
 
+The database is stored in `__db/synthesis_tasks.db`:
+
 ```bash
 # View statistics by status
-sqlite3 synthesis_tasks.db \
+sqlite3 __db/synthesis_tasks.db \
   "SELECT status, COUNT(*) FROM tasks GROUP BY status"
 
 # Average quality score
-sqlite3 synthesis_tasks.db \
+sqlite3 __db/synthesis_tasks.db \
   "SELECT AVG(quality_score) FROM tasks WHERE status='completed'"
 
 # Failed files with errors
-sqlite3 synthesis_tasks.db \
+sqlite3 __db/synthesis_tasks.db \
   "SELECT lecture_name, error_message FROM tasks WHERE status='failed'"
 
 # Export to CSV
-sqlite3 -header -csv synthesis_tasks.db \
+sqlite3 -header -csv __db/synthesis_tasks.db \
   "SELECT * FROM tasks WHERE status='completed'" > completed.csv
 ```
 
@@ -491,7 +496,7 @@ python KevinTheAntagonizerClaudeCodeNotesMaker.py \
 tail -f runID.*.log
 
 # Terminal 3: Watch database stats
-watch -n 2 'sqlite3 synthesis_tasks.db "SELECT status, COUNT(*) FROM tasks GROUP BY status"'
+watch -n 2 'sqlite3 __db/synthesis_tasks.db "SELECT status, COUNT(*) FROM tasks GROUP BY status"'
 ```
 
 ---
@@ -587,11 +592,11 @@ python KevinTheAntagonizerClaudeCodeNotesMaker.py \
   -model haiku
 
 # Phase 2: Check quality
-sqlite3 synthesis_tasks.db \
+sqlite3 __db/synthesis_tasks.db \
   "SELECT COUNT(*) FROM tasks WHERE quality_score < 0.7"
 
 # Phase 3: Re-process low-quality with opus
-sqlite3 synthesis_tasks.db \
+sqlite3 __db/synthesis_tasks.db \
   "UPDATE tasks SET status='pending' WHERE quality_score < 0.7"
 
 python KevinTheAntagonizerClaudeCodeNotesMaker.py \
@@ -603,10 +608,10 @@ python KevinTheAntagonizerClaudeCodeNotesMaker.py \
 
 ```bash
 # Before major operations
-cp synthesis_tasks.db synthesis_tasks.db.backup
+cp __db/synthesis_tasks.db __db/synthesis_tasks.db.backup
 
 # Or with timestamp
-cp synthesis_tasks.db synthesis_tasks.db.$(date +%Y%m%d_%H%M%S)
+cp __db/synthesis_tasks.db __db/synthesis_tasks.db.$(date +%Y%m%d_%H%M%S)
 ```
 
 ---
@@ -628,7 +633,8 @@ Assuming average 5,000-token transcripts:
 ### Resource Usage
 
 - **Memory**: ~50-100 MB per process
-- **Database**: <10 MB for 1000 files
+- **Database** (`__db/`): <10 MB for 1000 files
+- **Config** (`config/`): <1 KB
 - **Logs**: ~1 MB per 100 files processed
 - **Output**: 1.5-2x size of input .srt files
 
@@ -673,7 +679,12 @@ Main dependencies:
 
 ```
 KevinTheAntagonizerClaudeCodeNotesMaker/
-├── KevinTheAntagonizerClaudeCodeNotesMaker.py  # Main application (SINGLE FILE - ~1100 lines)
+├── KevinTheAntagonizerClaudeCodeNotesMaker.py  # Main application (~1200 lines)
+├── config/                        # Configuration directory
+│   ├── .anthropic_api_key         # API key for --list-models only
+│   └── claude_models_cache.json   # Cached model list
+├── __db/                          # Database directory
+│   └── synthesis_tasks.db         # SQLite task tracking
 ├── requirements.txt               # Dependencies
 ├── CLAUDE.md                      # Architecture guide
 ├── README.md                      # This file
@@ -682,7 +693,7 @@ KevinTheAntagonizerClaudeCodeNotesMaker/
     └── cli_args.py                # Deprecated (merged into main file)
 ```
 
-**Note**: Version 2.0+ uses single-file architecture for simplicity and portability.
+**Note**: Version 2.3 uses hybrid auth - API for model listing, Claude Code CLI for synthesis.
 
 ---
 
@@ -733,7 +744,22 @@ python KevinTheAntagonizerClaudeCodeNotesMaker.py -scan /courses --dry-run
 
 ## Changelog
 
-### Version 2.2 (November 2025) - Current
+### Version 2.3 (December 2025) - Current
+- **NEW**: Hybrid authentication approach
+  - `--list-models`: Uses Anthropic API for fresh model data
+  - All synthesis: Uses Claude Code CLI auth (subscription login)
+  - No API credits used for synthesis work
+- **NEW**: Organized directory structure
+  - `config/`: Configuration files (.anthropic_api_key, claude_models_cache.json)
+  - `__db/`: Database storage (synthesis_tasks.db)
+- **NEW**: Persistent model caching
+  - Models fetched via API cached in `config/claude_models_cache.json`
+  - Fast model validation without API calls
+- **NEW**: API key storage in `config/.anthropic_api_key`
+  - Prompted on first `--list-models` run
+  - Only used for model listing, not synthesis
+
+### Version 2.2 (November 2025)
 - **NEW**: Graceful shutdown support (Ctrl+C handling)
   - First Ctrl+C: Complete current batch before exiting
   - Second Ctrl+C: Force immediate exit

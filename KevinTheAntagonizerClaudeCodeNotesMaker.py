@@ -61,7 +61,13 @@ AVAILABLE_MODELS = {
 DEFAULT_MODEL = "sonnet-4.5"
 DEFAULT_WORKERS = 1
 DEFAULT_BATCH_SIZE = 10
+
+# Directory structure
+CONFIG_DIR = "config"
+DB_DIR = "__db"
 DEFAULT_DB_NAME = "synthesis_tasks.db"
+MODELS_CACHE_FILE = "claude_models_cache.json"
+API_KEY_FILE = ".anthropic_api_key"  # For model listing only
 
 # Global cache for discovered models (populated lazily)
 _DISCOVERED_MODELS = None
@@ -125,31 +131,203 @@ def setup_signal_handlers():
 # Model Discovery Functions
 # ==============================================================================
 
-def discover_models_from_cli() -> Dict[str, str]:
+def get_config_dir() -> Path:
+    """Get the config directory path, creating it if needed"""
+    config_dir = Path(__file__).parent / CONFIG_DIR
+    config_dir.mkdir(exist_ok=True)
+    return config_dir
+
+
+def get_db_dir() -> Path:
+    """Get the database directory path, creating it if needed"""
+    db_dir = Path(__file__).parent / DB_DIR
+    db_dir.mkdir(exist_ok=True)
+    return db_dir
+
+
+def get_cache_file_path() -> Path:
+    """Get the path to the models cache file (in config directory)"""
+    return get_config_dir() / MODELS_CACHE_FILE
+
+
+def load_cached_models() -> Optional[Dict]:
+    """
+    Load models from cache file.
+
+    Returns:
+        Dict with 'models' and 'cached_at' keys, or None if cache invalid/missing
+    """
+    cache_path = get_cache_file_path()
+
+    if not cache_path.exists():
+        return None
+
+    try:
+        with open(cache_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        # Validate cache structure
+        if 'models' in data and 'cached_at' in data:
+            return data
+        return None
+    except (json.JSONDecodeError, IOError) as e:
+        print(f"WARNING: Failed to load model cache: {e}", file=sys.stderr)
+        return None
+
+
+def save_models_to_cache(models: Dict[str, str], source: str = "api") -> bool:
+    """
+    Save discovered models to cache file.
+
+    Args:
+        models: Dict of alias -> model_id mappings
+        source: Where models were discovered from (api, cli, static)
+
+    Returns:
+        True if saved successfully
+    """
+    cache_path = get_cache_file_path()
+
+    cache_data = {
+        'models': models,
+        'cached_at': datetime.now().isoformat(),
+        'source': source,
+        'version': '1.0'
+    }
+
+    try:
+        with open(cache_path, 'w', encoding='utf-8') as f:
+            json.dump(cache_data, f, indent=2)
+        return True
+    except IOError as e:
+        print(f"WARNING: Failed to save model cache: {e}", file=sys.stderr)
+        return False
+
+
+def get_api_key_file_path() -> Path:
+    """Get the path to the API key file (in config directory)"""
+    return get_config_dir() / API_KEY_FILE
+
+
+def load_api_key() -> Optional[str]:
+    """
+    Load API key from file.
+
+    The API key is ONLY used for --list-models to fetch fresh model data.
+    All other operations use Claude Code CLI authentication.
+
+    Returns:
+        API key string or None if not configured
+    """
+    key_path = get_api_key_file_path()
+
+    if not key_path.exists():
+        return None
+
+    try:
+        with open(key_path, 'r', encoding='utf-8') as f:
+            key = f.read().strip()
+        return key if key else None
+    except IOError:
+        return None
+
+
+def save_api_key(api_key: str) -> bool:
+    """
+    Save API key to file.
+
+    Args:
+        api_key: The Anthropic API key
+
+    Returns:
+        True if saved successfully
+    """
+    key_path = get_api_key_file_path()
+
+    try:
+        with open(key_path, 'w', encoding='utf-8') as f:
+            f.write(api_key.strip())
+        return True
+    except IOError as e:
+        print(f"WARNING: Failed to save API key: {e}", file=sys.stderr)
+        return False
+
+
+def fetch_models_from_api(api_key: str) -> Optional[Dict[str, str]]:
+    """
+    Fetch available models from Anthropic API.
+
+    This is ONLY used for --list-models command.
+    All synthesis operations use Claude Code CLI authentication.
+
+    Args:
+        api_key: Anthropic API key
+
+    Returns:
+        Dict of alias -> model_id mappings, or None if failed
+    """
+    import urllib.request
+    import urllib.error
+
+    url = "https://api.anthropic.com/v1/models"
+    headers = {
+        'x-api-key': api_key,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json'
+    }
+
+    try:
+        req = urllib.request.Request(url, headers=headers, method='GET')
+
+        with urllib.request.urlopen(req, timeout=10) as response:
+            data = json.loads(response.read().decode('utf-8'))
+
+        if 'data' in data:
+            models = {}
+            for model in data['data']:
+                model_id = model.get('id', '')
+                if model_id.startswith('claude-'):
+                    alias = generate_alias_from_id(model_id)
+                    if alias:
+                        models[alias] = model_id
+                    else:
+                        # Use simplified ID as fallback alias
+                        simple_alias = model_id.replace('claude-', '').rsplit('-', 1)[0]
+                        models[simple_alias] = model_id
+
+            if models:
+                return models
+
+        return None
+
+    except urllib.error.HTTPError as e:
+        print(f"ERROR: API request failed (HTTP {e.code}): {e.reason}", file=sys.stderr)
+        return None
+    except urllib.error.URLError as e:
+        print(f"ERROR: API request failed: {e.reason}", file=sys.stderr)
+        return None
+    except Exception as e:
+        print(f"ERROR: Failed to fetch models from API: {e}", file=sys.stderr)
+        return None
+
+
+def discover_models_from_cli() -> Optional[Dict[str, str]]:
     """
     Discover available Claude models from Claude Code CLI.
 
     Returns:
-        Dict mapping model aliases to full model IDs
-        Falls back to AVAILABLE_MODELS if CLI unavailable
+        Dict mapping model aliases to full model IDs, or None if failed
     """
     import subprocess
     import shutil
 
-    # Note: logger not available yet at module level, so we'll print warnings
-
     # Check if claude-code CLI exists
     cli_path = shutil.which('claude-code')
     if not cli_path:
-        print("WARNING: Claude Code CLI not found - using static model list", file=sys.stderr)
-        return AVAILABLE_MODELS.copy()
+        return None
 
     try:
-        # Attempt to get models from CLI
-        # Try common commands that might work:
-        # 1. claude-code models list
-        # 2. claude-code --list-models
-
+        # Try claude-code models list
         result = subprocess.run(
             ['claude-code', 'models', 'list'],
             capture_output=True,
@@ -167,18 +345,16 @@ def discover_models_from_cli() -> Dict[str, str]:
             )
 
         if result.returncode == 0:
-            # Parse output (format TBD based on actual CLI)
             models = parse_cli_models_output(result.stdout)
             if models:
                 print(f"INFO: Discovered {len(models)} models from Claude Code CLI", file=sys.stderr)
                 return models
 
-        print("WARNING: Could not fetch models from CLI - using static list", file=sys.stderr)
-        return AVAILABLE_MODELS.copy()
+        return None
 
     except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as e:
-        print(f"WARNING: Model discovery failed: {e} - using static list", file=sys.stderr)
-        return AVAILABLE_MODELS.copy()
+        print(f"WARNING: CLI model discovery failed: {e}", file=sys.stderr)
+        return None
 
 
 def parse_cli_models_output(output: str) -> Optional[Dict[str, str]]:
@@ -199,7 +375,6 @@ def parse_cli_models_output(output: str) -> Optional[Dict[str, str]]:
     # Try JSON parsing first
     try:
         data = json.loads(output)
-        # Handle various JSON structures
         if isinstance(data, dict):
             if 'models' in data:
                 for model in data['models']:
@@ -208,7 +383,6 @@ def parse_cli_models_output(output: str) -> Optional[Dict[str, str]]:
             elif 'data' in data:  # Anthropic API format
                 for model in data['data']:
                     model_id = model.get('id')
-                    # Generate alias from ID
                     alias = generate_alias_from_id(model_id)
                     if alias:
                         models[alias] = model_id
@@ -221,7 +395,6 @@ def parse_cli_models_output(output: str) -> Optional[Dict[str, str]]:
     for line in output.strip().split('\n'):
         parts = line.split()
         if len(parts) >= 2:
-            # Format: "alias    model-id"
             alias, model_id = parts[0], parts[1]
             if model_id.startswith('claude-'):
                 models[alias] = model_id
@@ -233,27 +406,103 @@ def generate_alias_from_id(model_id: str) -> Optional[str]:
     """Generate friendly alias from model ID like 'claude-sonnet-4-5-20250929'"""
     import re
 
-    # Extract family and version from ID
-    match = re.match(r'claude-(\w+)-(\d+)-?(\d+)?-\d{8}', model_id)
+    # Handle various model ID patterns
+    # Pattern 1: claude-{family}-{major}-{minor}-{date} (e.g., claude-sonnet-4-5-20250929)
+    match = re.match(r'claude-(\w+)-(\d+)-(\d+)-\d{8}', model_id)
     if match:
-        family = match.group(1)  # sonnet, opus, haiku
-        major = match.group(2)   # 3, 4
-        minor = match.group(3)   # 5, or None
+        family = match.group(1)
+        major = match.group(2)
+        minor = match.group(3)
+        return f"{family}-{major}.{minor}"
 
-        if minor:
-            return f"{family}-{major}.{minor}"
-        else:
-            return f"{family}-{major}"
+    # Pattern 2: claude-{major}-{family}-{date} (e.g., claude-3-opus-20240229)
+    match = re.match(r'claude-(\d+)-(\w+)-\d{8}', model_id)
+    if match:
+        major = match.group(1)
+        family = match.group(2)
+        return family  # Just "opus", "sonnet", "haiku" for Claude 3
+
+    # Pattern 3: claude-{major}-{minor}-{family}-{date} (e.g., claude-3-5-sonnet-20241022)
+    match = re.match(r'claude-(\d+)-(\d+)-(\w+)-\d{8}', model_id)
+    if match:
+        major = match.group(1)
+        minor = match.group(2)
+        family = match.group(3)
+        return f"{family}-{major}.{minor}"
 
     return None
 
 
-def get_available_models(force_refresh: bool = False) -> Dict[str, str]:
+def fetch_models_live() -> Tuple[Optional[Dict[str, str]], str]:
     """
-    Get available models with lazy discovery.
+    Fetch fresh models from Anthropic API (for --list-models only).
+
+    Requires API key stored in .anthropic_api_key file.
+    This is separate from synthesis which uses Claude Code CLI auth.
+
+    Returns:
+        Tuple of (models_dict or None, status_message)
+    """
+    api_key = load_api_key()
+
+    if not api_key:
+        return None, "no API key configured"
+
+    models = fetch_models_from_api(api_key)
+    if models:
+        # Merge with static models
+        merged = AVAILABLE_MODELS.copy()
+        merged.update(models)
+        save_models_to_cache(merged, source="api")
+        return merged, "API (fresh)"
+
+    return None, "API fetch failed"
+
+
+def discover_models(force_refresh: bool = False) -> Tuple[Dict[str, str], str]:
+    """
+    Discover models for validation (uses cache, NOT API).
+
+    For normal operations (not --list-models), this uses:
+    1. Cached models (fast)
+    2. Static fallback
+
+    The API is ONLY used by --list-models command.
+    All synthesis uses Claude Code CLI authentication.
 
     Args:
-        force_refresh: Force re-discovery even if cached
+        force_refresh: Force cache refresh (still doesn't hit API)
+
+    Returns:
+        Tuple of (models_dict, source_string)
+    """
+    # Check cache first
+    if not force_refresh:
+        cached = load_cached_models()
+        if cached:
+            return cached['models'], f"cache ({cached.get('source', 'unknown')})"
+
+    # Try CLI discovery as backup
+    cli_models = discover_models_from_cli()
+    if cli_models:
+        merged = AVAILABLE_MODELS.copy()
+        merged.update(cli_models)
+        save_models_to_cache(merged, source="cli")
+        return merged, "CLI"
+
+    # Static fallback
+    return AVAILABLE_MODELS.copy(), "static"
+
+
+def get_available_models(force_refresh: bool = False) -> Dict[str, str]:
+    """
+    Get available models with lazy discovery and caching.
+
+    Uses cache/static for normal operations (no API call).
+    API is ONLY used by --list-models command.
+
+    Args:
+        force_refresh: Force re-discovery from cache
 
     Returns:
         Dictionary of model alias -> model ID mappings
@@ -261,7 +510,7 @@ def get_available_models(force_refresh: bool = False) -> Dict[str, str]:
     global _DISCOVERED_MODELS
 
     if _DISCOVERED_MODELS is None or force_refresh:
-        _DISCOVERED_MODELS = discover_models_from_cli()
+        _DISCOVERED_MODELS, _ = discover_models(force_refresh=force_refresh)
 
     return _DISCOVERED_MODELS
 
@@ -278,7 +527,7 @@ class CLIArgs:
         self.recursive: bool = False
         self.workers: int = DEFAULT_WORKERS
         self.batch_size: int = DEFAULT_BATCH_SIZE
-        self.db_path: Path = Path(DEFAULT_DB_NAME)
+        self.db_path: Path = get_db_dir() / DEFAULT_DB_NAME
         self.reset_db: bool = False
         self.list_failed: bool = False
         self.retry_failed: bool = False
@@ -408,9 +657,9 @@ Available Models (use --list-models for current list):
     database.add_argument(
         '-db',
         type=str,
-        default=DEFAULT_DB_NAME,
+        default=None,  # Will use __db/synthesis_tasks.db
         metavar='<path>',
-        help=f'Custom database path (default: {DEFAULT_DB_NAME})'
+        help=f'Custom database path (default: {DB_DIR}/{DEFAULT_DB_NAME})'
     )
     database.add_argument(
         '-reset-db',
@@ -534,8 +783,10 @@ def validate_args(args: argparse.Namespace) -> CLIArgs:
     cli_args.model_name = args.model
     cli_args.model = available_models[args.model]
 
-    # Set database path
-    cli_args.db_path = Path(args.db).resolve()
+    # Set database path (default: __db/synthesis_tasks.db)
+    if args.db:
+        cli_args.db_path = Path(args.db).resolve()
+    # else: already set to default in CLIArgs.__init__()
 
     # Set flags
     cli_args.recursive = args.recursive
@@ -673,6 +924,48 @@ class DatabaseManager:
         except Exception as e:
             logging.error(f"Failed to add task: {e}")
             return False
+        finally:
+            conn.close()
+
+    def add_tasks_batch(self, tasks: List[Tuple[str, str, str, int]]) -> int:
+        """
+        Add multiple tasks to the database in a single transaction.
+
+        Args:
+            tasks: List of tuples (srt_path, course_name, lecture_name, file_size_kb)
+
+        Returns:
+            Number of tasks actually added (excludes duplicates)
+        """
+        if not tasks:
+            return 0
+
+        conn = sqlite3.connect(self.db_path)
+        cur = conn.cursor()
+
+        try:
+            # Get count before insert
+            cur.execute("SELECT COUNT(*) FROM tasks")
+            count_before = cur.fetchone()[0]
+
+            # Batch insert with executemany
+            cur.executemany("""
+                INSERT OR IGNORE INTO tasks
+                (srt_path, course_name, lecture_name, file_size_kb)
+                VALUES (?, ?, ?, ?)
+            """, tasks)
+
+            conn.commit()
+
+            # Get count after insert
+            cur.execute("SELECT COUNT(*) FROM tasks")
+            count_after = cur.fetchone()[0]
+
+            return count_after - count_before
+        except Exception as e:
+            logging.error(f"Failed to add tasks batch: {e}")
+            conn.rollback()
+            return 0
         finally:
             conn.close()
 
@@ -945,7 +1238,8 @@ class NoteSynthesisEngine:
 
     def __init__(self, cli_args: CLIArgs):
         self.cli_args = cli_args
-        self.db = DatabaseManager(cli_args.db_path, cli_args.reset_db)
+        # Note: Don't pass reset_db here - database reset already handled in main()
+        self.db = DatabaseManager(cli_args.db_path, reset=False)
         self.file_processor = FileProcessor()
         self.quality_controller = QualityController()
 
@@ -1275,13 +1569,14 @@ OUTPUT: Provide ONLY the markdown content. No preambles, no confirmations, just 
 # ==============================================================================
 
 def inventory_files(cli_args: CLIArgs, db: DatabaseManager) -> int:
-    """Inventory all files that need processing"""
+    """Inventory all files that need processing using batch inserts for performance"""
 
     logger = logging.getLogger(__name__)
     logger.info(f"Scanning {len(cli_args.scan_folders)} folder(s)")
 
     added_count = 0
     skipped_count = 0
+    BATCH_SIZE = 1000  # Insert 1000 files at a time for optimal performance
 
     for scan_folder in cli_args.scan_folders:
         # Find all SRT files based on recursive flag
@@ -1292,11 +1587,13 @@ def inventory_files(cli_args: CLIArgs, db: DatabaseManager) -> int:
 
         logger.info(f"Found {len(srt_files)} .srt files in {scan_folder}")
 
-        # Process files with progress logging
+        # Collect tasks for batch insertion
+        batch_tasks: List[Tuple[str, str, str, int]] = []
+
         for idx, srt_file in enumerate(srt_files):
-            # Log progress every 50 files
-            if idx % 50 == 0:
-                logger.info(f"Processing file {idx+1}/{len(srt_files)}: {srt_file.name}")
+            # Log progress every 500 files (less frequent since we're faster now)
+            if idx % 500 == 0:
+                logger.info(f"Scanning file {idx+1}/{len(srt_files)}: {srt_file.name}")
 
             # Check if notes already exist
             notes_path = srt_file.parent / f"{srt_file.stem}_KevinTheAntagonizer_Notes.md"
@@ -1305,13 +1602,24 @@ def inventory_files(cli_args: CLIArgs, db: DatabaseManager) -> int:
                 skipped_count += 1
                 continue
 
-            # Add to database
+            # Collect task info for batch insert
             course_name = srt_file.parent.name
             lecture_name = srt_file.stem
             file_size_kb = srt_file.stat().st_size // 1024
+            batch_tasks.append((str(srt_file), course_name, lecture_name, file_size_kb))
 
-            if db.add_task(str(srt_file), course_name, lecture_name, file_size_kb):
-                added_count += 1
+            # Insert batch when we reach BATCH_SIZE
+            if len(batch_tasks) >= BATCH_SIZE:
+                batch_added = db.add_tasks_batch(batch_tasks)
+                added_count += batch_added
+                logger.info(f"Batch inserted: {batch_added} tasks (total: {added_count})")
+                batch_tasks = []
+
+        # Insert remaining tasks in final batch
+        if batch_tasks:
+            batch_added = db.add_tasks_batch(batch_tasks)
+            added_count += batch_added
+            logger.info(f"Final batch inserted: {batch_added} tasks")
 
     logger.info(f"Inventory complete: {added_count} new files, {skipped_count} already processed")
     return added_count
@@ -1334,10 +1642,57 @@ async def main():
     # Handle --list-models command (early exit)
     if cli_args.list_models:
         print("\n" + "="*80)
-        print("AVAILABLE CLAUDE MODELS")
+        print("AVAILABLE CLAUDE MODELS - Live Update")
+        print("="*80)
+        print("NOTE: This uses Anthropic API to fetch models.")
+        print("      All other operations use Claude Code CLI auth.")
         print("="*80 + "\n")
 
-        models = get_available_models(force_refresh=True)
+        # Check for API key
+        api_key = load_api_key()
+        key_file_path = get_api_key_file_path()
+
+        if not api_key:
+            print("[SETUP] No API key found for model listing.")
+            print(f"[SETUP] Key file: {key_file_path}")
+            print()
+            print("To enable live model updates, you need an Anthropic API key.")
+            print("This is ONLY used for --list-models, not for synthesis.")
+            print()
+            user_input = input("Enter your Anthropic API key (or press Enter to use cached/static): ").strip()
+
+            if user_input:
+                if save_api_key(user_input):
+                    print(f"[OK] API key saved to {key_file_path}")
+                    api_key = user_input
+                else:
+                    print("[ERROR] Failed to save API key")
+            print()
+
+        # Try to fetch from API
+        if api_key:
+            print("[INFO] Fetching latest models from Anthropic API...")
+            models, status = fetch_models_live()
+
+            if models:
+                source = status
+                print(f"[OK] {status} - fetched {len(models)} models")
+            else:
+                print(f"[WARN] {status} - falling back to cache/static")
+                models, source = discover_models()
+        else:
+            print("[INFO] Using cached/static model list...")
+            models, source = discover_models()
+
+        print(f"[INFO] Source: {source}")
+
+        # Show cache info
+        cache_path = get_cache_file_path()
+        cached = load_cached_models()
+        if cached:
+            print(f"[INFO] Cache file: {cache_path}")
+            print(f"[INFO] Cache updated: {cached.get('cached_at', 'unknown')}")
+        print()
 
         # Group by family
         families = {}
@@ -1354,7 +1709,10 @@ async def main():
                 print(f"  {alias:15} -> {model_id}{default_marker}")
             print()
 
+        print(f"Total models: {len(models)}")
         print(f"Default: {DEFAULT_MODEL}")
+        print(f"\nCache location: {cache_path}")
+        print(f"API key file: {key_file_path}")
         print("\nUsage: -model <alias>")
         print("="*80)
         return
