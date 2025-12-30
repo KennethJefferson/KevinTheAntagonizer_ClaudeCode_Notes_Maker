@@ -26,6 +26,15 @@ from typing import List, Dict, Optional, Tuple
 import logging
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import random
+
+# ==============================================================================
+# Concurrency Control for Claude API Calls
+# ==============================================================================
+# Limits concurrent Claude API calls to prevent EBUSY file locking on ~/.claude.json
+# Multiple claude.exe processes competing for the same config file causes errors
+CLAUDE_CONCURRENCY_LIMIT = 3  # Max concurrent Claude API calls
+_claude_semaphore: Optional[asyncio.Semaphore] = None
 
 # REAL Claude Agent SDK imports
 from claude_agent_sdk import (
@@ -1261,13 +1270,12 @@ class NoteSynthesisEngine:
         else:
             self.system_prompt = Config.DEFAULT_SYSTEM_PROMPT
 
-    async def synthesize_with_sdk(self, transcript: str, lecture_name: str, course_name: str, worker_id: int = 0) -> Optional[str]:
+    async def synthesize_with_sdk(self, transcript: str, lecture_name: str, course_name: str) -> Optional[str]:
         """
         Use Claude Agent SDK to synthesize transcript
         Returns synthesized content or None if failed
 
-        Each worker gets its own config directory via CLAUDE_CONFIG_DIR to prevent
-        EBUSY file locking when running multiple parallel workers.
+        Uses semaphore to limit concurrent API calls and prevent EBUSY file locking.
         """
 
         # Construct the prompt - CRITICAL: Don't mention files or automation!
@@ -1296,48 +1304,90 @@ REQUIREMENTS:
 OUTPUT: Provide ONLY the markdown content. No preambles, no confirmations, just the comprehensive notes."""
 
         try:
-            # Create per-worker config directory to prevent EBUSY file locking
-            # Each worker gets its own ~/.claude.json via CLAUDE_CONFIG_DIR
-            import tempfile
-            worker_config_dir = os.path.join(tempfile.gettempdir(), f"claude-worker-{worker_id}")
-            os.makedirs(worker_config_dir, exist_ok=True)
-
-            # Configure agent options with model from CLI and per-worker isolation
+            # Configure agent options with model from CLI
             options = ClaudeAgentOptions(
                 system_prompt=self.system_prompt,
                 model=self.cli_args.model,  # Use model from CLI
                 allowed_tools=Config.ALLOWED_TOOLS,
                 disallowed_tools=Config.DISALLOWED_TOOLS,
                 permission_mode='default',  # Use default permission handling with allowed/disallowed tools
-                max_turns=1,  # Single turn for synthesis
-                cwd=Path.cwd(),  # Use current directory
-                setting_sources=None,  # Explicit isolation for parallel workers
-                env={"CLAUDE_CONFIG_DIR": worker_config_dir}  # Per-worker config isolation
+                max_turns=1  # Single turn for synthesis
             )
 
-            # Direct API call - no semaphore needed with per-worker config isolation
-            full_response = ""
-            async for message in query(prompt=prompt, options=options):
-                if isinstance(message, AssistantMessage):
-                    for block in message.content:
-                        if isinstance(block, TextBlock):
-                            full_response += block.text
+            # Use semaphore to limit concurrent Claude API calls (prevents EBUSY on ~/.claude.json)
+            global _claude_semaphore
+            if _claude_semaphore is None:
+                _claude_semaphore = asyncio.Semaphore(CLAUDE_CONCURRENCY_LIMIT)
 
-            return full_response if full_response else None
+            # Check if prompt exceeds Windows command line limit (8000 chars for safety)
+            # If so, use streaming mode which sends prompt via stdin instead of command line
+            WINDOWS_CMD_LIMIT = 7500  # Safety margin below 8191 limit
+            use_streaming = len(prompt) > WINDOWS_CMD_LIMIT
 
-        except CLINotFoundError:
-            self.logger.error("Claude Code CLI not found or not logged in.")
+            max_retries = 3
+            for attempt in range(max_retries):
+                async with _claude_semaphore:
+                    # Add jitter to stagger file access timing
+                    await asyncio.sleep(random.uniform(0.1, 0.5))
+
+                    try:
+                        full_response = ""
+
+                        if use_streaming:
+                            # Streaming mode: send prompt via stdin (bypasses command line limit)
+                            async def prompt_generator():
+                                yield {
+                                    "type": "user",
+                                    "message": {"role": "user", "content": prompt},
+                                    "parent_tool_use_id": None,
+                                    "session_id": f"synthesis-{id(self)}"
+                                }
+
+                            async for message in query(prompt=prompt_generator(), options=options):
+                                if isinstance(message, AssistantMessage):
+                                    for block in message.content:
+                                        if isinstance(block, TextBlock):
+                                            full_response += block.text
+                        else:
+                            # String mode: standard command line approach
+                            async for message in query(prompt=prompt, options=options):
+                                if isinstance(message, AssistantMessage):
+                                    for block in message.content:
+                                        if isinstance(block, TextBlock):
+                                            full_response += block.text
+
+                        return full_response if full_response else None
+
+                    except ProcessError as e:
+                        # Check for EBUSY error and retry with backoff
+                        if "EBUSY" in str(e) and attempt < max_retries - 1:
+                            wait_time = 0.5 * (2 ** attempt)  # Exponential backoff
+                            self.logger.warning(f"EBUSY error on attempt {attempt + 1}, retrying in {wait_time:.1f}s...")
+                            await asyncio.sleep(wait_time)
+                            continue
+                        raise  # Re-raise if not EBUSY or max retries reached
+
+            # Should not reach here, but just in case
+            self.logger.error("Max retries exceeded for Claude API call")
+            return None
+
+        except CLINotFoundError as e:
+            self.logger.error(f"CLINotFoundError: {e}")
             self.logger.error("Install: npm install -g @anthropic-ai/claude-code")
             self.logger.error("Then login: claude-code login")
             return None
         except ProcessError as e:
-            self.logger.error(f"Process failed with exit code {e.exit_code}")
+            self.logger.error(f"ProcessError (exit code {e.exit_code}): {e}")
+            if e.stderr:
+                self.logger.error(f"stderr: {e.stderr}")
             return None
         except CLIJSONDecodeError as e:
-            self.logger.error(f"Failed to parse response: {e}")
+            self.logger.error(f"CLIJSONDecodeError: {e}")
             return None
         except Exception as e:
-            self.logger.error(f"SDK synthesis failed: {e}")
+            self.logger.error(f"SDK synthesis failed ({type(e).__name__}): {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
             return None
 
     async def process_single_task(self, task: Dict, worker_id: int = 0, worker_pbar: tqdm = None) -> bool:
@@ -1371,8 +1421,8 @@ OUTPUT: Provide ONLY the markdown content. No preambles, no confirmations, just 
                                       error_message=f"Too large ({len(transcript)} chars)")
             return False
 
-        # Synthesize using SDK (pass worker_id for per-worker config isolation)
-        synthesized = await self.synthesize_with_sdk(transcript, lecture_name, course_name, worker_id)
+        # Synthesize using SDK
+        synthesized = await self.synthesize_with_sdk(transcript, lecture_name, course_name)
 
         if not synthesized:
             self.db.update_task_status(task_id, 'failed',
