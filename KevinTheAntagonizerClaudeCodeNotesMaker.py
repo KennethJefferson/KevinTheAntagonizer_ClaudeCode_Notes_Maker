@@ -586,6 +586,7 @@ class CLIArgs:
         self.stats: bool = False
         self.list_models: bool = False
         self.system_prompt_file: Optional[Path] = None
+        self.persona_file: Optional[Path] = None  # Kevin persona subagent file
         self.model: str = AVAILABLE_MODELS[DEFAULT_MODEL]
         self.model_name: str = DEFAULT_MODEL
         self.dry_run: bool = False
@@ -604,17 +605,76 @@ class CLIArgs:
         return Path(__file__).parent / f"runID.{timestamp}.log"
 
 # ==============================================================================
+# Persona Loading
+# ==============================================================================
+
+# Fallback prompt if subagent file not found
+FALLBACK_SYSTEM_PROMPT = """You are Kevin Burleigh, a battle-tested Java/Spring Boot architect with 20+ years of experience.
+You synthesize technical transcripts into comprehensive learning notes.
+You are opinionated, practical, and thorough.
+You extract maximum value from every transcript."""
+
+# Default location for Kevin persona subagent
+DEFAULT_PERSONA_FILE = Path.home() / ".claude" / "agents" / "KevinTheAntagonizer.md"
+
+
+def load_kevin_persona(persona_file: Optional[Path] = None) -> str:
+    """
+    Load Kevin persona from subagent file, with fallback to embedded prompt.
+
+    The subagent file has YAML frontmatter that needs to be stripped:
+    ---
+    name: Kevin-The-Antagonizer
+    description: ...
+    model: sonnet
+    ---
+    [actual persona content here]
+
+    Args:
+        persona_file: Optional path to persona file. If None, uses DEFAULT_PERSONA_FILE.
+
+    Returns:
+        The persona prompt string.
+    """
+    target_file = persona_file or DEFAULT_PERSONA_FILE
+
+    if target_file.exists():
+        try:
+            content = target_file.read_text(encoding='utf-8')
+
+            # Strip YAML frontmatter (between --- markers)
+            # Format: ---\nfrontmatter\n---\ncontent
+            parts = content.split('---', 2)
+            if len(parts) >= 3:
+                persona_content = parts[2].strip()
+                logging.info(f"[PERSONA] Loaded from: {target_file}")
+                logging.info(f"[PERSONA] Content length: {len(persona_content)} chars")
+                return persona_content
+            else:
+                # No frontmatter, use entire content
+                logging.info(f"[PERSONA] Loaded (no frontmatter): {target_file}")
+                return content.strip()
+
+        except Exception as e:
+            logging.warning(f"[PERSONA] Failed to read {target_file}: {e}")
+            logging.warning("[PERSONA] Falling back to embedded prompt")
+    else:
+        logging.warning(f"[PERSONA] File not found: {target_file}")
+        logging.warning("[PERSONA] Falling back to embedded prompt")
+
+    return FALLBACK_SYSTEM_PROMPT
+
+
+# ==============================================================================
 # Configuration
 # ==============================================================================
 
 class Config:
     """Application configuration"""
 
-    # Default system prompt (can be overridden via CLI)
-    DEFAULT_SYSTEM_PROMPT = """You are Kevin Burleigh, a battle-tested Java/Spring Boot architect with 20+ years of experience.
-You synthesize technical transcripts into comprehensive learning notes.
-You are opinionated, practical, and thorough.
-You extract maximum value from every transcript."""
+    # System prompt loaded dynamically from subagent file
+    # Call load_kevin_persona() to get the actual prompt
+    DEFAULT_SYSTEM_PROMPT = FALLBACK_SYSTEM_PROMPT  # Will be overridden at runtime
 
     # Quality control settings
     MIN_QUALITY_LENGTH = 1500
@@ -740,7 +800,13 @@ Available Models (use --list-models for current list):
         '-system-prompt',
         type=str,
         metavar='<file>',
-        help='Use custom system prompt from file'
+        help='Use custom system prompt from file (overrides persona file)'
+    )
+    advanced.add_argument(
+        '-persona-file',
+        type=str,
+        metavar='<file>',
+        help=f'Kevin persona file (default: ~/.claude/agents/KevinTheAntagonizer.md)'
     )
     advanced.add_argument(
         '-model',
@@ -815,6 +881,17 @@ def validate_args(args: argparse.Namespace) -> CLIArgs:
             print(f"[ERROR] System prompt path is not a file: {prompt_file}")
             sys.exit(1)
         cli_args.system_prompt_file = prompt_file
+
+    # Validate persona file if specified
+    if args.persona_file:
+        persona_file = Path(args.persona_file).resolve()
+        if not persona_file.exists():
+            print(f"[ERROR] Persona file not found: {persona_file}")
+            sys.exit(1)
+        if not persona_file.is_file():
+            print(f"[ERROR] Persona path is not a file: {persona_file}")
+            sys.exit(1)
+        cli_args.persona_file = persona_file
 
     # Set model with dynamic discovery
     available_models = get_available_models()
@@ -899,6 +976,17 @@ def print_configuration(cli_args: CLIArgs):
     if cli_args.system_prompt_file:
         print(f"\n[CUSTOM SYSTEM PROMPT]")
         print(f"   - File:        {cli_args.system_prompt_file}")
+    else:
+        # Show persona file info
+        print(f"\n[KEVIN PERSONA]")
+        if cli_args.persona_file:
+            print(f"   - File:        {cli_args.persona_file}")
+        else:
+            print(f"   - File:        {DEFAULT_PERSONA_FILE}")
+            if DEFAULT_PERSONA_FILE.exists():
+                print(f"   - Status:      Found")
+            else:
+                print(f"   - Status:      Not found (using fallback)")
 
     if cli_args.retry_failed:
         print(f"\n[RETRY MODE]")
@@ -1306,12 +1394,20 @@ class NoteSynthesisEngine:
         )
         self.logger = logging.getLogger(__name__)
 
-        # Load system prompt
+        # Load system prompt (priority: system_prompt_file > persona_file > default)
         if cli_args.system_prompt_file:
             with open(cli_args.system_prompt_file, 'r') as f:
                 self.system_prompt = f.read()
+            self.logger.info(f"[PERSONA] Using custom system prompt: {cli_args.system_prompt_file}")
         else:
-            self.system_prompt = Config.DEFAULT_SYSTEM_PROMPT
+            # Load Kevin persona from subagent file
+            self.system_prompt = load_kevin_persona(cli_args.persona_file)
+            if cli_args.persona_file:
+                self.logger.info(f"[PERSONA] Using persona from: {cli_args.persona_file}")
+            elif DEFAULT_PERSONA_FILE.exists():
+                self.logger.info(f"[PERSONA] Using default persona: {DEFAULT_PERSONA_FILE}")
+            else:
+                self.logger.warning("[PERSONA] No persona file found, using embedded fallback")
 
     async def synthesize_with_sdk(self, transcript: str, lecture_name: str, course_name: str) -> Optional[str]:
         """

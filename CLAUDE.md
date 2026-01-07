@@ -86,41 +86,47 @@ The application is a **single, self-contained file** with all functionality inte
    - `parse_arguments()` - Main entry point
    - `print_configuration()` - Config display
 
-2. **Configuration** (lines 101-119)
-   - Default system prompt (Kevin persona)
+2. **Persona Loading** (lines 606-664)
+   - `load_kevin_persona()` - Loads persona from subagent file
+   - Default location: `~/.claude/agents/KevinTheAntagonizer.md`
+   - Strips YAML frontmatter automatically
+   - Falls back to embedded prompt if file not found
+   - Single source of truth with Claude Code subagent
+
+3. **Configuration** (lines 670-690)
    - Quality control settings
    - Allowed/disallowed tools
    - Model selection
 
-3. **DatabaseManager** (lines 378-558)
+4. **DatabaseManager** (lines 378-558)
    - SQLite-based task tracking (`__db/synthesis_tasks.db`)
    - Schema: `tasks` and `processing_stats` tables
    - Operations: add_task, get_pending_tasks, update_status, get_statistics
    - Supports: batch operations, retry logic, progress tracking
 
-4. **FileProcessor** (lines 564-602)
+5. **FileProcessor** (lines 564-602)
    - `clean_srt_content()` - Removes timestamps, line numbers
    - `save_notes()` - Saves output as `*_KevinTheAntagonizer_Notes.md`
    - Never overwrites existing files
 
-5. **QualityController** (lines 608-673)
+6. **QualityController** (lines 608-673)
    - 7-point quality validation system
    - Checks: length, structure, code blocks, voice, automation markers, depth, emphasis
    - Pass threshold: 5/7 checks (70%)
 
-6. **NoteSynthesisEngine** (lines 679-862)
+7. **NoteSynthesisEngine** (lines 679-862)
    - Orchestrates synthesis using Claude Agent SDK
    - Uses `query()` function for prompt-response
    - Implements retry logic (max 3 attempts)
    - Model selection from CLI arguments
-   - Custom system prompts supported
+   - Loads persona from subagent file or custom path
 
-7. **File Inventory** (lines 868-903)
+8. **File Inventory** (lines 868-903)
    - Scans folders for .srt files
    - Recursive or non-recursive modes
    - Skips existing notes (no overwrites)
 
-8. **Main Application** (lines 909-1031)
+9. **Main Application** (lines 909-1031)
    - Parses CLI arguments
    - Handles database operations
    - Processes files in batches
@@ -804,7 +810,17 @@ For issues with:
 
 ## Changelog
 
-### Version 2.5 (December 2025) - Current
+### Version 2.6 (January 2026) - Current
+- **NEW**: Persona file support - loads Kevin persona from `~/.claude/agents/KevinTheAntagonizer.md`
+  - Single source of truth for Kevin's persona (shared with Claude Code subagent)
+  - `load_kevin_persona()` function with YAML frontmatter stripping
+  - Falls back to embedded prompt if file not found
+  - Logs persona source during initialization
+- **NEW**: `-persona-file` CLI argument to specify custom persona file location
+- **IMPROVED**: Configuration display shows persona file path and status
+- **IMPROVED**: Priority chain: `-system-prompt` > `-persona-file` > default persona > fallback
+
+### Version 2.5 (December 2025)
 - **CHANGED**: Concurrency limit raised from 3 to 100 for full parallelism
   - All workers can now hit the API simultaneously (was limited to 3)
   - Jitter (0.1-0.5s) still provides slight staggering between calls

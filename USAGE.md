@@ -1,6 +1,6 @@
 # KevinTheAntagonizerClaudeCodeNotesMaker - Comprehensive Usage Guide
 
-**Version**: 2.5 (Full Parallelism with Tunable Concurrency)
+**Version**: 2.6 (Persona File Support)
 **Last Updated**: December 2025
 
 ## Table of Contents
@@ -119,7 +119,8 @@ python KevinTheAntagonizerClaudeCodeNotesMaker.py \
 
 | Argument | Description |
 |----------|-------------|
-| `-system-prompt <file>` | Use custom system prompt from file |
+| `-system-prompt <file>` | Use custom system prompt from file (overrides persona file) |
+| `-persona-file <file>` | Kevin persona file (default: `~/.claude/agents/KevinTheAntagonizer.md`) |
 | `-model <name>` | Claude model selection (see [Models](#available-models)) |
 | `--list-models` | Show available Claude models and exit |
 | `--dry-run` | Validate configuration without processing files |
@@ -195,6 +196,7 @@ If Claude Code CLI is unavailable, falls back to built-in model list.
 | `--list-models` | Flag | `false` | No | Show all available Claude models and exit |
 | `-list-failed` | Flag | `false` | No | Display all failed tasks from database and exit |
 | `-model <name>` | String | `sonnet-4.5` | No | Claude model to use (opus, sonnet, haiku, sonnet-3.5, sonnet-4.5) |
+| `-persona-file <file>` | String | `~/.claude/agents/KevinTheAntagonizer.md` | No | Path to Kevin persona subagent file |
 | `-recursive` | Flag | `false` | No | Scan subdirectories recursively |
 | `-reset-db` | Flag | `false` | No | Clear all data from database and start fresh |
 | `-retry-failed` | Flag | `false` | No | Retry all previously failed tasks from database |
@@ -237,7 +239,8 @@ If Claude Code CLI is unavailable, falls back to built-in model list.
 
 #### Advanced Options
 ```bash
--system-prompt <file>   # Custom system prompt file
+-system-prompt <file>   # Custom system prompt file (overrides persona)
+-persona-file <file>    # Kevin persona file (default: ~/.claude/agents/KevinTheAntagonizer.md)
 --dry-run               # Validate configuration only (no processing)
 ```
 
@@ -1101,7 +1104,15 @@ python KevinTheAntagonizerClaudeCodeNotesMaker.py -scan /courses --dry-run
 
 ## Changelog
 
-### Version 2.5 (December 2025) - Current
+### Version 2.6 (January 2026) - Current
+- **NEW**: Persona file support - loads Kevin persona from `~/.claude/agents/KevinTheAntagonizer.md`
+  - Single source of truth for Kevin's persona (shared with Claude Code subagent)
+  - Automatically strips YAML frontmatter from subagent files
+  - Falls back to embedded prompt if file not found
+- **NEW**: `-persona-file` CLI argument to specify custom persona file location
+- **IMPROVED**: Configuration display shows persona file status
+
+### Version 2.5 (December 2025)
 - **CHANGED**: Concurrency limit raised from 3 to 100 for full parallelism
   - All workers can hit the API simultaneously
   - Jitter (0.1-0.5s) still provides slight staggering

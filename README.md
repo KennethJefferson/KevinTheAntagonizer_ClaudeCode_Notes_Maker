@@ -4,7 +4,7 @@ A powerful single-file CLI Python application that transforms technical course t
 
 **Notes Style**: Written in the distinctive voice of "Kevin Burleigh" - a battle-tested Java/Spring Boot architect with opinionated, practical insights and real-world gotchas.
 
-**Version**: 2.5 (Full Parallelism with Tunable Concurrency)
+**Version**: 2.6 (Persona File Support)
 
 ---
 
@@ -18,7 +18,8 @@ A powerful single-file CLI Python application that transforms technical course t
 - **Model Selection**: Choose from 5 Claude models (haiku, sonnet, opus, sonnet-3.5, sonnet-4.5)
 - **Multi-Worker Support**: True parallel processing with configurable worker count
 - **Graceful Shutdown**: Ctrl+C completes current batch; double Ctrl+C force exits
-- **Custom Personas**: Override default Kevin voice with custom system prompts
+- **Persona File Support**: Loads Kevin persona from `~/.claude/agents/KevinTheAntagonizer.md` (single source of truth)
+- **Custom Personas**: Override with `-system-prompt` or `-persona-file` arguments
 - **Automatic Retry**: Failed files automatically retry up to 3 times
 - **Resume Support**: Continue where you left off if interrupted
 - **No Overwrites**: Skips files that already have notes
@@ -108,7 +109,8 @@ python KevinTheAntagonizerClaudeCodeNotesMaker.py \
 
 | Argument | Description |
 |----------|-------------|
-| `-system-prompt <file>` | Use custom system prompt from file |
+| `-system-prompt <file>` | Use custom system prompt from file (overrides persona) |
+| `-persona-file <file>` | Kevin persona file (default: `~/.claude/agents/KevinTheAntagonizer.md`) |
 | `-model <name>` | Model selection (see [Models](#available-models)) |
 | `--dry-run` | Validate configuration without processing |
 
@@ -750,7 +752,15 @@ python KevinTheAntagonizerClaudeCodeNotesMaker.py -scan /courses --dry-run
 
 ## Changelog
 
-### Version 2.5 (December 2025) - Current
+### Version 2.6 (January 2026) - Current
+- **NEW**: Persona file support - loads Kevin persona from `~/.claude/agents/KevinTheAntagonizer.md`
+  - Single source of truth for Kevin's persona (shared with Claude Code subagent)
+  - Automatically strips YAML frontmatter from subagent files
+  - Falls back to embedded prompt if file not found
+- **NEW**: `-persona-file` CLI argument to specify custom persona file location
+- **IMPROVED**: Configuration display shows persona file status
+
+### Version 2.5 (December 2025)
 - **CHANGED**: Concurrency limit raised from 3 to 100 for full parallelism
   - All workers can hit the API simultaneously
   - Jitter (0.1-0.5s) still provides slight staggering
